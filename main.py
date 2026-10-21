@@ -31,7 +31,7 @@ def main(args):
     data_loaders = []
     for data_name in data_names:
         dataset = TPDataset(os.path.join(data_config['data_dir'], data_name))
-        if data_name == 'sum_r1ssj_train.npz':
+        if data_name == 'train.npz':  # fixed: original never matched, scaler stayed unfitted
             data_scaler.fit(dataset.data['x'])
         dataset.fit(data_scaler)
         data_loader = DataLoader(dataset, batch_size=data_config['batch_size'])

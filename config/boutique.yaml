@@ -1,0 +1,21 @@
+# Model config for Online Boutique (10 services x 4 features [pod, cpu, res, req]).
+# num_nodes / input_size / step_num_in / step_num_out are overwritten by train.py
+# from <data_dir>/meta.json, so they always match the dataset.
+dataset:
+  data_dir: data/boutique_sim
+  step_num_in: 20
+  step_num_out: 1
+  num_nodes: 10
+  input_size: 4
+  batch_size: 64
+  device: auto          # auto -> cuda:0 if available, else cpu
+
+AdapGLA:                # DeepScaler's predictor (attention-based ST-GCN)
+  num_block: 2
+  kernel_size: 5
+  num_cheb_filter: 64
+  num_time_filter: 64
+  conv_type: cheb
+  K: 3
+  init_feature_num: 8   # rank of the learned graph (must be <= num_nodes)
+  adj_mx_path: data/boutique_sim/adj_od.npy,data/boutique_sim/adj_cc.npy
