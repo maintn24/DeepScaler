@@ -24,7 +24,7 @@ import yaml
 
 from models import AdapGL
 from pipeline.collect import collect
-from pipeline.common import FEATURES, SERVICES
+from pipeline.common import SERVICES
 
 
 def scale_to_pods(pred, restriction=0.35):
@@ -54,6 +54,7 @@ def main():
     mean, std = np.array(sc["mean"]), np.array(sc["std"])
     step = int(meta["interval_s"] or 30)
     step_in = meta["step_in"]
+    features = meta["features"]                  # same feature order as training
     period = a.period or step
 
     device = torch.device("cpu")
@@ -70,7 +71,7 @@ def main():
         t0 = time.time()
         end = t0 - t0 % step
         df = collect(a.prom, a.namespace, end - (step_in - 1) * step, end, step)
-        x = np.stack([np.stack([df[f"{s}_{f}"].to_numpy()[-step_in:] for f in FEATURES], -1)
+        x = np.stack([np.stack([df[f"{s}_{f}"].to_numpy()[-step_in:] for f in features], -1)
                       for s in SERVICES], axis=1)[None]          # (1, step_in, N, F)
         xs = torch.as_tensor((x - mean) / std, dtype=torch.float32)
         with torch.no_grad():

@@ -9,6 +9,7 @@ Metrics (same PromQL as the original repo's metrics_fetch.py):
   cpu : CPU usage / CPU limit (summed over pods)
   res : mean response time (s) seen by the Istio sidecar (reporter=destination)
   req : request rate (req/s) received by the service
+  mem : memory usage / memory limit (summed over pods)
 It also writes the call graph observed by Istio (source -> destination
 workload) as an adjacency matrix (`--adj_out`), used as the "od" graph.
 
@@ -40,6 +41,8 @@ TEMPLATES = {
             "destination_workload_namespace='{ns}',destination_workload='{svc}'}}[{win}]))/1000"),
     "req": ("sum(rate(istio_requests_total{{reporter='destination',"
             "destination_workload_namespace='{ns}',destination_workload='{svc}'}}[{win}]))"),
+    "mem": ("sum(container_memory_usage_bytes{{namespace='{ns}',container='{svc}'}})"
+            "/sum(container_spec_memory_limit_bytes{{namespace='{ns}',container='{svc}'}})"),
 }
 EDGE_QUERY = ("sum by (source_workload, destination_workload) (increase(istio_requests_total{{"
               "reporter='source',source_workload_namespace='{ns}',destination_workload_namespace='{ns}'}}[{dur}s]))")

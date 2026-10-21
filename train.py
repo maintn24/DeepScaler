@@ -4,7 +4,9 @@ Fixed / reproducible replacement for main.py:
   * the StandardScaler is actually fitted on the training split (in main.py the
     fit was guarded by a file name that never matched, so training crashed);
   * dataset shape (nodes, features, window) is read from <data_dir>/meta.json;
-  * runs on CPU or GPU (`device: auto`), e.g. Colab / Kaggle;
+  * uses the original configs (config/train_dataset_speed.yaml + config/train_config.yaml);
+    only dataset-shape fields and graph paths are overridden from <data_dir>/meta.json;
+  * falls back to CPU when the configured CUDA device is not available;
   * after training it evaluates the best checkpoint on the test split against a
     persistence baseline and saves everything needed later (predictions on the
     validation and test splits, e.g. for conformal calibration).
@@ -86,8 +88,8 @@ def main(args):
         "step_num_in": meta["step_in"],
         "step_num_out": meta["horizon"],
     })
-    dev = data_cfg.get("device", "auto")
-    if dev == "auto":
+    dev = str(data_cfg.get("device", "auto"))
+    if dev == "auto" or (dev.startswith("cuda") and not torch.cuda.is_available()):
         dev = "cuda:0" if torch.cuda.is_available() else "cpu"
     device = torch.device(dev)
     print(f"device={device}  data={data_dir}  meta={meta['samples']}")
@@ -113,7 +115,6 @@ def main(args):
     net_cfg.update(data_cfg)
     adj_names = [s.strip() for s in args.adj.split(",")]
     net_cfg["adj_mx_path"] = ",".join(os.path.join(data_dir, f"adj_{a}.npy") for a in adj_names)
-    net_cfg["init_feature_num"] = min(net_cfg["init_feature_num"], net_cfg["num_nodes"])
 
     Model = getattr(AdapGL, net_name)
     net_pred = Model(**net_cfg).to(device)
@@ -190,7 +191,7 @@ def main(args):
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data_dir", default=None, help="dataset dir from pipeline/build_dataset.py")
-    p.add_argument("--model_config_path", default="config/boutique.yaml")
+    p.add_argument("--model_config_path", default="config/train_dataset_speed.yaml")
     p.add_argument("--train_config_path", default="config/train_config.yaml")
     p.add_argument("--model_name", default="AdapGLA")
     p.add_argument("--num_epoch", type=int, default=15, help="max epochs per alternating round")

@@ -2,7 +2,9 @@
 
 Node order and feature order follow the original repo (predict_scale.py):
   nodes    = 10 Online-Boutique services (alphabetical, as in metrics_fetch.py)
-  features = [pod, cpu, res, req]  -> feature 0 (pod) is the prediction target
+  features = [pod, cpu, res, req, mem] -> feature 0 (pod) is the prediction target
+             (paper Table I / Fig. 4 use 5 indicators; the original predict_scale.py fed only
+              the first 4 -> build_dataset.py --features pod,cpu,res,req reproduces that)
 """
 import numpy as np
 
@@ -11,7 +13,7 @@ SERVICES = [
     "frontend", "paymentservice", "productcatalogservice", "recommendationservice",
     "shippingservice",
 ]
-FEATURES = ["pod", "cpu", "res", "req"]
+FEATURES = ["pod", "cpu", "res", "req", "mem"]
 TARGET_FEATURE = 0  # "pod": number of replicas needed at the next step
 
 # Caller -> callee edges of Online Boutique (from the gRPC clients in its source code).

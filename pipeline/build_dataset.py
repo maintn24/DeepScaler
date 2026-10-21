@@ -43,8 +43,8 @@ def make_windows(data, step_in, horizon):
     return np.stack(xs).astype(np.float32), np.stack(ys).astype(np.float32)
 
 
-def corr_adj(data_train, threshold=0.3):
-    req = data_train[:, :, FEATURES.index("req")]
+def corr_adj(data_train, features=FEATURES, threshold=0.3):
+    req = data_train[:, :, features.index("req")]
     std = req.std(axis=0)
     c = np.corrcoef(req.T) if np.all(std > 0) else np.nan_to_num(np.corrcoef(req.T))
     a = np.abs(np.nan_to_num(c))
@@ -60,11 +60,16 @@ def main():
     p.add_argument("--step_in", type=int, default=20, help="history length (original repo: 80)")
     p.add_argument("--horizon", type=int, default=1, help="steps to predict (original repo: 1)")
     p.add_argument("--split", default="0.7,0.1,0.2")
+    p.add_argument("--features", default=",".join(FEATURES),
+                   help="input features, first must be 'pod' (target). Paper: pod,cpu,res,req,mem; "
+                        "original predict_scale.py: pod,cpu,res,req")
     p.add_argument("--od_adj", default=None,
                    help=".npy call graph from collect.py; default = static Online-Boutique graph")
     a = p.parse_args()
 
-    data, interval = load_raw(a.raw)
+    features = [f.strip() for f in a.features.split(",")]
+    assert features[0] == "pod", "feature 0 must be 'pod' (prediction target)"
+    data, interval = load_raw(a.raw, features=features)
     T = data.shape[0]
     fr = [float(v) for v in a.split.split(",")]
     n_tr, n_va = int(T * fr[0]), int(T * fr[1])
@@ -83,8 +88,8 @@ def main():
 
     od = np.load(a.od_adj) if a.od_adj else call_graph_adj()
     np.save(os.path.join(a.out_dir, "adj_od.npy"), od.astype(np.float32))
-    np.save(os.path.join(a.out_dir, "adj_cc.npy"), corr_adj(parts["train"]))
-    meta = {"services": SERVICES, "features": FEATURES, "target": FEATURES[TARGET_FEATURE],
+    np.save(os.path.join(a.out_dir, "adj_cc.npy"), corr_adj(parts["train"], features))
+    meta = {"services": SERVICES, "features": features, "target": features[TARGET_FEATURE],
             "interval_s": interval, "step_in": a.step_in, "horizon": a.horizon,
             "raw": os.path.abspath(a.raw), "samples": sizes}
     with open(os.path.join(a.out_dir, "meta.json"), "w") as f:

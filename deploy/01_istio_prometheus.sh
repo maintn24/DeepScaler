@@ -19,5 +19,9 @@ kubectl -n istio-system patch svc grafana -p '{"spec":{"type":"NodePort","ports"
 # metrics-server (kind cần --kubelet-insecure-tls)
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
 kubectl -n kube-system patch deploy metrics-server --type=json \
-  -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' || true
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},
+        {"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}]'
+kubectl -n kube-system rollout status deploy/metrics-server --timeout=180s
+for i in $(seq 1 12); do kubectl top nodes >/dev/null 2>&1 && break; sleep 10; done
+kubectl top nodes || { echo "metrics-server chưa chạy -> HPA sẽ không scale"; exit 1; }
 echo "Prometheus: http://localhost:30090  (thử: curl 'http://localhost:30090/api/v1/query?query=up')"

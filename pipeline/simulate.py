@@ -58,6 +58,10 @@ BASE_RT = {"frontend": 0.010, "adservice": 0.004, "cartservice": 0.003,
            "recommendationservice": 0.004, "shippingservice": 0.001}
 CPU_LIMIT = 0.2
 IDLE_CPU = 0.004
+# memory limit per pod (MiB, boutique.yaml) and memory model: base working set + per-req/s cost
+MEM_LIMIT = {s: (450 if s == "recommendationservice" else 128) for s in SERVICES}
+MEM_BASE = {s: (180 if s == "recommendationservice" else 40) for s in SERVICES}
+MEM_PER_RPS = 0.15
 HPA_TARGET = 0.5
 MAX_PODS = 10
 READY_DELAY = 30
@@ -151,7 +155,10 @@ def simulate(trace, loops=16, interval=30, seed=2021):
                     ready[i] += delta[i]      # scale-down is immediate
             pods = target
 
-        sample = np.stack([pods, usage / (pods * CPU_LIMIT), rt, req], axis=1)  # (N, F)
+        mem_lim = np.array([MEM_LIMIT[s] for s in SERVICES]) * pods
+        mem_use = np.array([MEM_BASE[s] for s in SERVICES]) * pods + MEM_PER_RPS * req
+        mem = np.clip(mem_use / mem_lim * rng.lognormal(0, 0.03, size=n), 0, 1)
+        sample = np.stack([pods, usage / (pods * CPU_LIMIT), rt, req, mem], axis=1)  # (N, F)
         acc = sample if acc is None else acc + sample
         if (k + 1) % (interval // TICK) == 0:
             avg = acc / (interval // TICK)
@@ -164,7 +171,7 @@ def simulate(trace, loops=16, interval=30, seed=2021):
 
 def to_frame(data, interval):
     cols = {"time": np.arange(data.shape[0]) * interval}
-    feats = ["pod", "cpu", "res", "req"]
+    feats = ["pod", "cpu", "res", "req", "mem"]
     for j, s in enumerate(SERVICES):
         for f, name in enumerate(feats):
             cols[f"{s}_{name}"] = data[:, j, f]

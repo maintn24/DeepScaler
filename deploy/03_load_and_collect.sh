@@ -10,7 +10,8 @@ mkdir -p data/raw Logs
 python -c "import locust" 2>/dev/null || pip install -q locust requests pandas numpy
 START=$(date '+%Y-%m-%d %H:%M:%S')
 echo "[$START] bắt đầu bơm tải $HOURS giờ -> $HOST"
-locust -f pipeline/locustfile.py --headless --host "$HOST" --run-time "${HOURS}h" \
+RUN_TIME=$(python3 -c "print(int(float('$HOURS')*3600))") \
+locust -f pipeline/locustfile.py --headless --host "$HOST" \
        --csv "Logs/${RUN}_locust" > "Logs/${RUN}_locust.log" 2>&1 || true
 END=$(date '+%Y-%m-%d %H:%M:%S')
 python -m pipeline.collect --prom "$PROM" --namespace "$NS" --start "$START" --end "$END" \

@@ -1,7 +1,9 @@
 """Locust workload for Online Boutique replaying the FIFA-98 trace (sendFlow/random-100max.req).
 
 Same user behaviour and load shape as sendFlow/load_generator.py, but without
-hard-coded absolute paths, and the trace loops forever (stop with Ctrl+C / --run-time).
+hard-coded absolute paths; the trace loops until RUN_TIME seconds have passed
+(RUN_TIME=0 -> forever). Locust ignores --run-time when a LoadTestShape is used,
+so the duration must be enforced here by returning None from tick().
 
   locust -f pipeline/locustfile.py --headless --host http://<node-ip>:31000
   TRACE=sendFlow/random-100max.req TICK=5 SCALE=1.0 locust -f pipeline/locustfile.py ...
@@ -14,6 +16,7 @@ from locust import HttpUser, LoadTestShape, TaskSet, constant, task
 TRACE = os.environ.get("TRACE", os.path.join(os.path.dirname(__file__), "..", "sendFlow", "random-100max.req"))
 TICK = float(os.environ.get("TICK", 5))          # seconds per trace value
 SCALE = float(os.environ.get("SCALE", 1.0))      # multiply user counts (cluster size)
+RUN_TIME = float(os.environ.get("RUN_TIME", 0))  # seconds; 0 = run until Ctrl+C
 
 PRODUCTS = ['0PUK6V6EV0', '1YMWWN1N4O', '2ZYFJ3GM2N', '66VCHSJNUP', '6E92ZMYYFZ',
             '9SIQT8TOJO', 'L9ECAV7KIM', 'LS4PSXUNUM', 'OLJCESPC7Z']
@@ -64,5 +67,8 @@ class FifaTraceShape(LoadTestShape):
             self.users = [max(1, int(round(int(l) * SCALE))) for l in f if l.strip()]
 
     def tick(self):
-        i = int(self.get_run_time() // TICK) % len(self.users)
+        t = self.get_run_time()
+        if RUN_TIME and t >= RUN_TIME:
+            return None                          # stops the test
+        i = int(t // TICK) % len(self.users)
         return self.users[i], 100
