@@ -7,7 +7,7 @@ HOST=${HOST:-http://localhost:31000}; PROM=${PROM:-http://localhost:30090}
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 RUN=${RUN:-run_$(date +%Y%m%d_%H%M)}
 mkdir -p data/raw Logs
-pip install -q locust requests pandas numpy
+python -c "import locust" 2>/dev/null || pip install -q locust requests pandas numpy
 START=$(date '+%Y-%m-%d %H:%M:%S')
 echo "[$START] bắt đầu bơm tải $HOURS giờ -> $HOST"
 locust -f pipeline/locustfile.py --headless --host "$HOST" --run-time "${HOURS}h" \
