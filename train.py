@@ -35,6 +35,24 @@ from utils import scaler as scaler_mod
 from utils.metrics import get_mae, get_mape, get_rmse
 
 
+def paper_similarity(a1, a2):
+    """Weighted Jaccard similarity exactly as in the authors' similarity.py (used for Fig. 11):
+    graphs built with networkx.from_numpy_array (undirected, self-loops kept); for every node,
+    sum min/max of the weights over edges present in BOTH graphs, then average over nodes."""
+    import networkx as nx
+    g1, g2 = nx.from_numpy_array(np.asarray(a1, dtype=float)), nx.from_numpy_array(np.asarray(a2, dtype=float))
+    inter, union = {}, {}
+    for n in g1.nodes():
+        if n in g2:
+            for m in g1.neighbors(n):
+                if m in g2[n]:
+                    w1, w2 = g1[n][m]["weight"], g2[n][m]["weight"]
+                    inter[n] = inter.get(n, 0.0) + min(w1, w2)
+                    union[n] = union.get(n, 0.0) + max(w1, w2)
+    sims = [inter[n] / union[n] for n in inter if union[n] > 0]
+    return float(sum(sims) / len(sims)) if sims else 0.0
+
+
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -119,6 +137,8 @@ def main(args):
     Model = getattr(AdapGL, net_name)
     net_pred = Model(**net_cfg).to(device)
     net_graph = AdapGL.GraphLearn(net_cfg["num_nodes"], net_cfg["init_feature_num"]).to(device)
+    if args.epsilon is not None:            # paper eq. (6): threshold epsilon in (0,1), value not given
+        net_graph.epsilon = args.epsilon    # original code: 0.5 / num_nodes
     Optimizer = getattr(torch.optim, train_cfg["optimizer"])
     opt_pred = Optimizer(net_pred.parameters(), lr=train_cfg["learning_rate"],
                          weight_decay=train_cfg["weight_decay"])
@@ -134,6 +154,10 @@ def main(args):
     net_trainer = trainer.AdapGLTrainer(
         net_cfg["adj_mx_path"], net_pred, net_graph, opt_pred, opt_graph, sched_pred, None,
         args.num_epoch, args.num_iter, args.max_graph_num, data_scaler, model_save_path)
+    if args.epsilon is not None:            # same epsilon for the weighted union, eq. (9)
+        net_trainer.epsilon = args.epsilon
+    if args.delta is not None:              # paper eq. (7): delta in (0,1), original code 0.05
+        net_trainer.model_graph_trainer.delta = args.delta
     net_trainer.train(loaders[0], loaders[1])
     net_trainer.test(loaders[2])                    # original per-horizon printout
     train_time = time.time() - t0
@@ -167,7 +191,13 @@ def main(args):
     graph_info = {"learned_edges(off-diag)": int(learned_e.sum()),
                   "callgraph_edges(sym)": int(od_sym.sum()),
                   "jaccard_vs_callgraph": float(inter / union) if union else 0.0,
-                  "sparsity": float((best_adj == 0).mean())}
+                  "sparsity": float((best_adj == 0).mean()),
+                  "epsilon": float(net_graph.epsilon), "delta": float(net_trainer.model_graph_trainer.delta)}
+    try:                                    # Fig. 11 metric (authors' similarity.py)
+        graph_info["paper_similarity_od"] = paper_similarity(best_adj, np.load(os.path.join(data_dir, "adj_od.npy")))
+        graph_info["paper_similarity_cc"] = paper_similarity(best_adj, np.load(os.path.join(data_dir, "adj_cc.npy")))
+    except ImportError:
+        pass
 
     with open(os.path.join(args.out_dir, "scaler.json"), "w") as f:
         json.dump({"type": train_cfg["scaler"], "mean": np.asarray(data_scaler.mean).tolist(),
@@ -200,4 +230,8 @@ if __name__ == "__main__":
     p.add_argument("--adj", default="od,cc", help="initial graphs: od (call graph), cc (correlation)")
     p.add_argument("--out_dir", default="model_states/boutique_sim")
     p.add_argument("--no_shuffle", dest="shuffle", action="store_false")
+    p.add_argument("--epsilon", type=float, default=None,
+                   help="edge threshold of eq. (6); default = original code (0.5/num_nodes)")
+    p.add_argument("--delta", type=float, default=None,
+                   help="new-edge ratio of eq. (7); default = original code (0.05)")
     main(p.parse_args())
