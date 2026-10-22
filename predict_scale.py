@@ -482,7 +482,7 @@ def main(args):
             pods_num_to_scale['checkoutservice']=math.ceil(float(checkoutservice))
             
         if((float(currencyservice)-math.floor(float(currencyservice)))<0.5):
-            pods_num_to_scale['currencyservice']=math.floor(float(checkoutservice))
+            pods_num_to_scale['currencyservice']=math.floor(float(currencyservice))
         else:
             pods_num_to_scale['currencyservice']=math.ceil(float(currencyservice))
             
