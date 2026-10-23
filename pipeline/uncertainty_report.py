@@ -308,7 +308,10 @@ def main():
                "per_service": per.to_dict(orient="records")}
     json.dump(summary, open(os.path.join(a.out_dir, "summary.json"), "w"), indent=2)
     per.to_csv(os.path.join(a.out_dir, "per_service.csv"), index=False)
-    plots(series, df, step, alphas, a.window_min, a.slo, a.out_dir, a.label)
+    try:
+        plots(series, df, step, alphas, a.window_min, a.slo, a.out_dir, a.label)
+    except ImportError:
+        print("matplotlib chưa cài -> bỏ qua biểu đồ (pip install matplotlib)")
 
     pd.set_option("display.width", 200)
     print(json.dumps(overall, indent=1))

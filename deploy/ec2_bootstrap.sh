@@ -12,6 +12,6 @@ echo -e "fs.inotify.max_user_watches=524288\nfs.inotify.max_user_instances=512" 
 sudo sysctl --system >/dev/null
 python3 -m venv ~/dsenv
 ~/dsenv/bin/pip install -q --upgrade pip
-~/dsenv/bin/pip install -q locust requests pandas numpy pyyaml
+~/dsenv/bin/pip install -q locust requests pandas numpy pyyaml matplotlib
 echo 'source ~/dsenv/bin/activate' >> ~/.bashrc
 echo "Xong. Logout rồi SSH lại, sau đó: cd DeepScaler && deploy/00_kind_cluster.sh"
