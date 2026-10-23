@@ -86,7 +86,9 @@ def collect(prom, ns, start, end, step, services=SERVICES, metrics=None, verbose
     """metrics: list of metric names to query (default: model inputs + evaluation extras)."""
     templates = {**TEMPLATES, **EXTRA_TEMPLATES}
     names = list(templates) if metrics is None else list(metrics)
-    grid = np.arange(start, end + 1e-9, step)
+    # integer count: with unix times (~1.7e9 s) `end + 1e-9 == end`, so np.arange(start, end + 1e-9)
+    # silently dropped the last step
+    grid = start + step * np.arange(int(round((end - start) / step)) + 1)
     cols = {"time": grid - grid[0], "unix_time": grid}
     win = f"{max(2 * step, 30)}s"
     for svc in services:
