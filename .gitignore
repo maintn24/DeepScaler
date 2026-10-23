@@ -2,3 +2,10 @@
 data/raw/
 data/boutique_*/
 __pycache__/
+
+# trained models, datasets and run logs (large / reproducible)
+model_states/ds_s*/
+model_states/bl_*/
+data/c20*/
+*.zip
+Logs/run*_locust*
