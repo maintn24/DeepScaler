@@ -86,7 +86,9 @@ Không dùng HPA. Cố định số pod, rồi tăng tải theo bậc: 10 → 15
 ```bash
 cd ~/DeepScaler
 kubectl -n boutique delete hpa --all --ignore-not-found
-kubectl -n boutique scale deploy --all --replicas=2
+# 2 pod cho 9 service (không đụng redis-cart: 2 bản redis sẽ tách dữ liệu giỏ hàng), frontend 6 pod
+kubectl -n boutique scale deploy adservice cartservice checkoutservice currencyservice emailservice \
+    paymentservice productcatalogservice recommendationservice shippingservice --replicas=2
 kubectl -n boutique scale deploy frontend --replicas=6
 kubectl -n boutique rollout status deploy --timeout=300s
 
