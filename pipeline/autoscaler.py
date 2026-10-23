@@ -70,7 +70,8 @@ def main():
     while True:
         t0 = time.time()
         end = t0 - t0 % step
-        df = collect(a.prom, a.namespace, end - (step_in - 1) * step, end, step)
+        df = collect(a.prom, a.namespace, end - (step_in - 1) * step, end, step,
+                     metrics=features, verbose=False)
         x = np.stack([np.stack([df[f"{s}_{f}"].to_numpy()[-step_in:] for f in features], -1)
                       for s in SERVICES], axis=1)[None]          # (1, step_in, N, F)
         xs = torch.as_tensor((x - mean) / std, dtype=torch.float32)

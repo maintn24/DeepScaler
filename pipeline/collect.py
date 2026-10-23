@@ -10,6 +10,12 @@ Metrics (same PromQL as the original repo's metrics_fetch.py):
   res : mean response time (s) seen by the Istio sidecar (reporter=destination)
   req : request rate (req/s) received by the service
   mem : memory usage / memory limit (summed over pods)
+Extra columns for evaluation (not model inputs; build_dataset only reads --features):
+  p95    : 95th-percentile response time (s) at the service's sidecar (reporter=destination);
+           frontend_p95 = end-to-end latency seen by the load generator (it calls frontend)
+  err    : rate of 5xx responses (req/s) returned by the service
+  cpupod : CPU cores used by all containers of the service's pods, incl. the istio-proxy
+           sidecar (what HPA compares against the pod CPU request)
 It also writes the call graph observed by Istio (source -> destination
 workload) as an adjacency matrix (`--adj_out`), used as the "od" graph.
 
@@ -44,6 +50,16 @@ TEMPLATES = {
     "mem": ("sum(container_memory_usage_bytes{{namespace='{ns}',container='{svc}'}})"
             "/sum(container_spec_memory_limit_bytes{{namespace='{ns}',container='{svc}'}})"),
 }
+# evaluation-only metrics (uncertainty / SLA analysis, pipeline/uncertainty_report.py)
+EXTRA_TEMPLATES = {
+    "p95": ("histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{{"
+            "reporter='destination',destination_workload_namespace='{ns}',destination_workload='{svc}'}}"
+            "[{win}])))/1000"),
+    "err": ("sum(rate(istio_requests_total{{reporter='destination',destination_workload_namespace='{ns}',"
+            "destination_workload='{svc}',response_code=~'5..'}}[{win}]))"),
+    "cpupod": ("sum(irate(container_cpu_usage_seconds_total{{namespace='{ns}',"
+               "pod=~'{svc}-[a-z0-9]+-[a-z0-9]+',container!='',container!='POD'}}[1m]))"),
+}
 EDGE_QUERY = ("sum by (source_workload, destination_workload) (increase(istio_requests_total{{"
               "reporter='source',source_workload_namespace='{ns}',destination_workload_namespace='{ns}'}}[{dur}s]))")
 
@@ -66,19 +82,24 @@ def query_range(prom, q, start, end, step):
     return out
 
 
-def collect(prom, ns, start, end, step, services=SERVICES):
+def collect(prom, ns, start, end, step, services=SERVICES, metrics=None, verbose=True):
+    """metrics: list of metric names to query (default: model inputs + evaluation extras)."""
+    templates = {**TEMPLATES, **EXTRA_TEMPLATES}
+    names = list(templates) if metrics is None else list(metrics)
     grid = np.arange(start, end + 1e-9, step)
     cols = {"time": grid - grid[0], "unix_time": grid}
     win = f"{max(2 * step, 30)}s"
     for svc in services:
-        for m, tpl in TEMPLATES.items():
-            vals = query_range(prom, tpl.format(ns=ns, svc=svc, win=win), start, end, step)
+        for m in names:
+            vals = query_range(prom, templates[m].format(ns=ns, svc=svc, win=win), start, end, step)
             cols[f"{svc}_{m}"] = [vals.get(float(t), np.nan) for t in grid]
-        print("collected", svc)
+        if verbose:
+            print("collected", svc)
     df = pd.DataFrame(cols)
-    # no traffic -> NaN latency/rate; treat as 0, pods/cpu are forward-filled
+    # no traffic -> NaN latency/rate/errors; treat as 0, pods/cpu are forward-filled
+    zero_fill = [m for m in ("res", "req", "p95", "err") if m in names]
     for svc in services:
-        df[[f"{svc}_res", f"{svc}_req"]] = df[[f"{svc}_res", f"{svc}_req"]].fillna(0.0)
+        df[[f"{svc}_{m}" for m in zero_fill]] = df[[f"{svc}_{m}" for m in zero_fill]].fillna(0.0)
     return df.ffill().fillna(0.0)
 
 
