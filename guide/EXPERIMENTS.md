@@ -1,6 +1,6 @@
 # Kịch bản tái lập DeepScaler (theo báo, Sec. V–VI)
 
-Tài liệu này mô tả cách chạy từng kịch bản trong báo. Phần cơ bản (SSH, bootstrap, `00`–`01`, profiling μ, đưa file về máy, tắt EC2) nằm trong [`RUN_ONLINE.md`](RUN_ONLINE.md). Mọi lệnh đều chạy trên EC2, trong thư mục `~/DeepScaler`, bên trong `tmux`.
+Tài liệu này mô tả cách chạy từng kịch bản trong báo. Phần cơ bản (SSH, bootstrap, `00`–`01`, profiling μ, đưa file về máy, tắt EC2) nằm trong [`RUN_ONLINE.md`](RUN_ONLINE.md); thu dữ liệu train Boutique có burst: [`COLLECT_DATA.md`](COLLECT_DATA.md). Mọi lệnh đều chạy trên EC2, trong thư mục `~/DeepScaler`, bên trong `tmux`.
 
 Chọn ứng dụng bằng biến `DS_APP`: `boutique` (mặc định), `bookinfo` hoặc `trainticket`. Biến này áp dụng cho mọi script trong `pipeline/` (xem `pipeline/common.py`).
 
@@ -25,6 +25,9 @@ Các lựa chọn mà báo **không nêu** được cố định trước khi ch
 ## A. Thu dữ liệu train (HPA điều khiển)
 
 ### A0. Boutique, có burst và vượt SLA (làm trước tiên)
+
+Hướng dẫn từng bước đầy đủ (EC2, Security group, lỗi thường gặp): [`COLLECT_DATA.md`](COLLECT_DATA.md). Phần dưới đây là bản tóm tắt.
+
 
 Lần thu `run2_hpa` (5,1 giờ) không có bước nào vượt SLA (p95 tối đa 117 ms). Số pod gần như không đổi: giữ nguyên số pod chỉ sai 0,039 pod. Với dữ liệu như vậy, DeepScaler không thể hơn DCRNN hay cách giữ nguyên số pod. Báo cũng nêu điều này (Sec. VI): DeepScaler bị giới hạn bởi *"the quality and quantity of available historical data"*.
 

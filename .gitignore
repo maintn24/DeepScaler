@@ -10,3 +10,4 @@ data/c20*/
 *.zip
 Logs/run*_locust*
 reports/
+third_party/

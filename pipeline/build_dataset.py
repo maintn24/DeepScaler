@@ -34,6 +34,25 @@ def load_raw(csv_path, services=SERVICES, features=FEATURES):
     return data, interval
 
 
+def cc_eq16(data_train, features=FEATURES, feature="req"):
+    """CC relationship, eq. (16) of the DeepScaler paper: |correlation| of the RANKS of the history of
+    node i and j (Spearman), kept only if above the threshold T_Ci of node i. The paper does not give
+    T_Ci; we use the same rule as eq. (15): T_Ci = max_j |rho_ij| / 2 (fixed a priori, not tuned)."""
+    s = data_train[:, :, features.index(feature)]
+    r = np.apply_along_axis(lambda c: pd.Series(c).rank().to_numpy(), 0, s)
+    rho = np.abs(np.nan_to_num(np.corrcoef(r.T)))
+    np.fill_diagonal(rho, 0.0)
+    thr = rho.max(axis=1, keepdims=True) / 2
+    return np.where(rho > thr, rho, 0.0).astype(np.float32)
+
+
+def od_eq15(npas):
+    """OD relationship, eq. (15): A_ij = N_pas(i,j) (mean requests i->j) if N_pas(i,j) > max_j A_ij / 2."""
+    npas = np.asarray(npas, dtype=np.float64)
+    thr = npas.max(axis=1, keepdims=True) / 2
+    return np.where((npas > thr) & (npas > 0), npas, 0.0).astype(np.float32)
+
+
 def make_windows(data, step_in, horizon):
     T = data.shape[0]
     xs, ys = [], []
@@ -65,23 +84,45 @@ def main():
                         "original predict_scale.py: pod,cpu,res,req")
     p.add_argument("--od_adj", default=None,
                    help=".npy call graph from collect.py; default = static Online-Boutique graph")
+    p.add_argument("--npas", default=None,
+                   help="*_npas.npy from collect.py (mean req/s per call edge) -> adj_od15.npy (eq. 15)")
+    p.add_argument("--stride", type=int, default=1,
+                   help="keep every k-th sample: 30 s data with --stride 2 = 60 s interval of data_process.py")
+    p.add_argument("--split_by", default="segment", choices=["segment", "target"],
+                   help="segment: windows lie fully inside each split (old behaviour); target: a window "
+                        "belongs to the split of the step it predicts, its history may come from the "
+                        "previous split (no label leakage; needed for long windows such as step_in=80)")
     a = p.parse_args()
 
     features = [f.strip() for f in a.features.split(",")]
     assert features[0] == "pod", "feature 0 must be 'pod' (prediction target)"
     data, interval = load_raw(a.raw, features=features)
+    if a.stride > 1:
+        data = data[::a.stride]
+        interval = interval * a.stride if interval else None
     T = data.shape[0]
     fr = [float(v) for v in a.split.split(",")]
     n_tr, n_va = int(T * fr[0]), int(T * fr[1])
-    parts = {"train": data[:n_tr], "valid": data[n_tr:n_tr + n_va], "test": data[n_tr + n_va:]}
+    bounds = {"train": (0, n_tr), "valid": (n_tr, n_tr + n_va), "test": (n_tr + n_va, T)}
+    parts = {k: data[b0:b1] for k, (b0, b1) in bounds.items()}
 
     os.makedirs(a.out_dir, exist_ok=True)
     sizes = {}
+    if a.split_by == "target":
+        X, Y = make_windows(data, a.step_in, a.horizon)          # window k predicts step k + step_in
+        tgt = np.arange(len(X)) + a.step_in
     for name, seg in parts.items():
-        if seg.shape[0] < a.step_in + a.horizon + 1:
-            raise ValueError(f"{name} split has only {seg.shape[0]} steps; collect more data "
-                             f"or reduce --step_in")
-        x, y = make_windows(seg, a.step_in, a.horizon)
+        if a.split_by == "target":
+            b0, b1 = bounds[name]
+            m = (tgt >= b0) & (tgt + a.horizon - 1 < b1)
+            x, y = X[m], Y[m]
+            if len(x) == 0:
+                raise ValueError(f"{name} split has no window; collect more data or reduce --step_in")
+        else:
+            if seg.shape[0] < a.step_in + a.horizon + 1:
+                raise ValueError(f"{name} split has only {seg.shape[0]} steps; collect more data, "
+                                 f"reduce --step_in or use --split_by target")
+            x, y = make_windows(seg, a.step_in, a.horizon)
         np.savez_compressed(os.path.join(a.out_dir, f"{name}.npz"), x=x, y=y)
         sizes[name] = int(x.shape[0])
         print(f"{name:5s}: x {x.shape}  y {y.shape}")
@@ -89,8 +130,12 @@ def main():
     od = np.load(a.od_adj) if a.od_adj else call_graph_adj()
     np.save(os.path.join(a.out_dir, "adj_od.npy"), od.astype(np.float32))
     np.save(os.path.join(a.out_dir, "adj_cc.npy"), corr_adj(parts["train"], features))
+    np.save(os.path.join(a.out_dir, "adj_cc16.npy"), cc_eq16(parts["train"], features))
+    if a.npas:
+        np.save(os.path.join(a.out_dir, "adj_od15.npy"), od_eq15(np.load(a.npas)))
     meta = {"services": SERVICES, "features": features, "target": features[TARGET_FEATURE],
-            "interval_s": interval, "step_in": a.step_in, "horizon": a.horizon,
+            "interval_s": interval, "step_in": a.step_in, "horizon": a.horizon, "stride": a.stride,
+            "split": a.split, "split_by": a.split_by,
             "raw": os.path.abspath(a.raw), "samples": sizes}
     with open(os.path.join(a.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)

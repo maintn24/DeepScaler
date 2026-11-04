@@ -4,7 +4,7 @@
 # Chạy:  bash deploy/ec2_bootstrap.sh   (sau đó logout/login lại 1 lần để nhóm docker có hiệu lực)
 set -euo pipefail
 sudo apt-get update -y
-sudo apt-get install -y docker.io python3-pip python3-venv git tmux curl jq
+sudo apt-get install -y docker.io python3-pip python3-venv git tmux curl jq make
 sudo usermod -aG docker "$USER"
 sudo systemctl enable --now docker
 # kind cần nhiều inotify watcher khi chạy nhiều pod

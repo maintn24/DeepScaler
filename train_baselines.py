@@ -176,6 +176,6 @@ if __name__ == "__main__":
     p.add_argument("--train_config_path", default="config/train_config.yaml")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--batch_size", type=int, default=64)
-    p.add_argument("--max_epoch", type=int, default=90, help="= 15 epochs x 6 rounds of train.py")
-    p.add_argument("--patience", type=int, default=10, help="early stop (EarlyStop(10) in e2e_trainer.py)")
+    p.add_argument("--max_epoch", type=int, default=300, help="upper bound; early stopping decides (T-GCN needs > 90)")
+    p.add_argument("--patience", type=int, default=20, help="early stop patience (epochs without valid improvement)")
     main(p.parse_args())

@@ -55,9 +55,23 @@ class BoutiqueTasks(TaskSet):
             "credit_card_expiration_year": "2039", "credit_card_cvv": "672"})
 
 
+# Request mix (paper Sec. V-C / Fig. 11: "tuning different weights of user request types").
+# Default = weights of the authors' sendFlow/load_generator.py; override e.g.
+#   TASK_WEIGHTS="index=1,set_currency=2,browse_product=4,view_cart=2,add_to_cart=6,checkout=4"
+_DEFAULT_W = {"index": 1, "set_currency": 2, "browse_product": 10, "view_cart": 2, "add_to_cart": 3, "checkout": 1}
+_W = dict(_DEFAULT_W)
+for kv in filter(None, os.environ.get("TASK_WEIGHTS", "").split(",")):
+    k, v = kv.split("=")
+    assert k.strip() in _W, f"unknown task {k}; choose from {list(_W)}"
+    _W[k.strip()] = int(v)
+# a new TaskSet class so that Locust's metaclass turns the {function: weight} dict into its task list
+WeightedBoutiqueTasks = type("WeightedBoutiqueTasks", (BoutiqueTasks,),
+                             {"tasks": {getattr(BoutiqueTasks, k): w for k, w in _W.items() if w > 0}})
+
+
 class BoutiqueUser(HttpUser):
     wait_time = constant(1)
-    tasks = [BoutiqueTasks]
+    tasks = [WeightedBoutiqueTasks]
 
 
 class FifaTraceShape(LoadTestShape):

@@ -20,6 +20,8 @@ nodes:
   - {containerPort: 30090, hostPort: 30090}   # Prometheus
   - {containerPort: 31000, hostPort: 31000}   # Boutique frontend
   - {containerPort: 30300, hostPort: 30300}   # Grafana
+  - {containerPort: 30012, hostPort: 30012}   # BookInfo productpage (authors' bookinfo.yaml)
+  - {containerPort: 32677, hostPort: 32677}   # Train-Ticket UI (ts-ui-dashboard)
 - role: worker
 - role: worker
 YAML

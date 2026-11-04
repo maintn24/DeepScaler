@@ -23,7 +23,7 @@ Evidence computed (one row per service + overall):
 Online (EC2, after deploy/04_run_deepscaler.sh):
   python -m pipeline.uncertainty_report --csv data/raw/online_ds.csv \
       --decisions Logs/autoscaler.jsonl --mu reports/mu.json --label online --out_dir reports/online
-Capacity profiling -> mu (ramp trace, fixed replicas, see deploy/RUN_ONLINE.md):
+Capacity profiling -> mu (ramp trace, fixed replicas, see guide/RUN_ONLINE.md):
   python -m pipeline.uncertainty_report --csv data/raw/profile.csv --mu_basis pod --mu_only \
       --out_dir reports
 HPA run (no forecast: decision = replicas that actually ran):
@@ -41,7 +41,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from pipeline.common import SERVICES
+from pipeline.common import CFG, CONTAINERS, ENTRY, SERVICES
 
 RULE = 0.35                     # predict_scale.py: ceil(pred) unless frac(pred) < 0.35
 
@@ -63,8 +63,10 @@ def cpu_resources(yaml_path):
     out = {}
     for d in yaml.safe_load_all(open(yaml_path)):
         if d and d.get("kind") == "Deployment" and d["metadata"]["name"] in SERVICES:
-            c = d["spec"]["template"]["spec"]["containers"][0]["resources"]
-            out[d["metadata"]["name"]] = (cores(c["requests"]["cpu"]), cores(c["limits"]["cpu"]))
+            name = d["metadata"]["name"]
+            cts = d["spec"]["template"]["spec"]["containers"]
+            c = next((x for x in cts if x["name"] == CONTAINERS.get(name, name)), cts[0]).get("resources", {})
+            out[name] = (cores(c.get("requests", {}).get("cpu", "100m")), cores(c.get("limits", {}).get("cpu", "200m")))
     return out
 
 
@@ -141,7 +143,7 @@ def analyse(df, rows, y_hat, r, cur, mu, step, alphas, window_min, slo, burst_pc
     short = r < demand
     win = max(2, int(window_min * 60 / step))
 
-    lat_col = "frontend_p95" if "frontend_p95" in df else "frontend_res"
+    lat_col = f"{ENTRY}_p95" if f"{ENTRY}_p95" in df else f"{ENTRY}_res"
     lat = df[lat_col].to_numpy()[rows]
     viol = lat > slo
     any_short = short.any(axis=1)
@@ -225,7 +227,7 @@ def plots(series, df, step, alphas, win_min, slo, out_dir, label):
     ax[1].set_ylabel("# services short")
     ax[2].plot(t_min, series["lat"] * 1000, color="#55A868")
     ax[2].axhline(slo * 1000, ls="--", color="gray", label="SLO")
-    ax[2].set_ylabel("frontend latency (ms)"); ax[2].set_xlabel("minutes"); ax[2].legend(fontsize=8)
+    ax[2].set_ylabel(f"{ENTRY} latency (ms)"); ax[2].set_xlabel("minutes"); ax[2].legend(fontsize=8)
     for x in ax:
         x.grid(alpha=0.3)
     fig.suptitle(f"[{label}] load, under-provisioning and latency")
@@ -261,7 +263,7 @@ def main():
     p.add_argument("--mu_basis", default="app", choices=["app", "pod"])
     p.add_argument("--cpu_target", type=float, default=0.5, help="utilisation target (HPA: 50%%)")
     p.add_argument("--sidecar_req", type=float, default=0.1, help="istio-proxy CPU request (cores)")
-    p.add_argument("--boutique_yaml", default="benchmarks/boutique/boutique.yaml")
+    p.add_argument("--boutique_yaml", default=CFG["manifest"], help="manifest with CPU requests/limits")
     p.add_argument("--slo", type=float, default=0.2, help="latency SLO in seconds")
     p.add_argument("--alphas", default="0.05,0.1")
     p.add_argument("--window_min", type=float, default=20, help="rolling window for E2 (minutes)")

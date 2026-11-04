@@ -198,6 +198,22 @@ def main(args):
         graph_info["paper_similarity_cc"] = paper_similarity(best_adj, np.load(os.path.join(data_dir, "adj_cc.npy")))
     except ImportError:
         pass
+    # Fig. 11 against reference graphs normalised like every affinity matrix of the paper (eq. 3):
+    # D~^-1/2 (A + I) D~^-1/2. OD = call graph (eq. 15 when adj_od15.npy exists), CC = eq. (16).
+    def norm_eq3(a):
+        a = np.asarray(a, dtype=np.float64); a = np.maximum(a, a.T) + np.eye(len(a))
+        d = a.sum(1) ** -0.5
+        return d[:, None] * a * d[None, :]
+    try:
+        od_ref = "adj_od15.npy" if os.path.exists(os.path.join(data_dir, "adj_od15.npy")) else "adj_od.npy"
+        graph_info["fig11_od_ref"] = od_ref
+        graph_info["fig11_sim_od"] = paper_similarity(best_adj, norm_eq3(np.load(os.path.join(data_dir, od_ref))))
+        if os.path.exists(os.path.join(data_dir, "adj_cc16.npy")):
+            graph_info["fig11_sim_cc"] = paper_similarity(best_adj, norm_eq3(np.load(os.path.join(data_dir, "adj_cc16.npy"))))
+        graph_info["fig11_identity_baseline_od"] = paper_similarity(np.eye(len(best_adj)), norm_eq3(np.load(os.path.join(data_dir, od_ref))))
+        graph_info["diag_mean"] = float(np.diag(best_adj).mean())
+    except ImportError:
+        pass
 
     with open(os.path.join(args.out_dir, "scaler.json"), "w") as f:
         json.dump({"type": train_cfg["scaler"], "mean": np.asarray(data_scaler.mean).tolist(),
@@ -227,7 +243,10 @@ if __name__ == "__main__":
     p.add_argument("--num_epoch", type=int, default=15, help="max epochs per alternating round")
     p.add_argument("--num_iter", type=int, default=6, help="alternating (predictor, graph) rounds")
     p.add_argument("--max_graph_num", type=int, default=3, help="size of the adjacency set")
-    p.add_argument("--adj", default="od,cc", help="initial graphs: od (call graph), cc (correlation)")
+    p.add_argument("--adj", default="od",
+                   help="initial graphs. Paper: only the invocation graph (Sec. IV-B 'The initial A contains an "
+                        "invocation relationship', Sec. V-C 'initial affinity matrices ... contain only "
+                        "invocation relationships') -> od. 'od,cc' adds the correlation graph (not in the paper)")
     p.add_argument("--out_dir", default="model_states/boutique_sim")
     p.add_argument("--no_shuffle", dest="shuffle", action="store_false")
     p.add_argument("--epsilon", type=float, default=None,

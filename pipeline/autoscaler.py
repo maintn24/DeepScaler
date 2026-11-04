@@ -5,7 +5,13 @@ Every `--period` seconds:
      from Prometheus (same PromQL as training data, same sampling step);
   2. predict next-step pods with the trained AdapGLA + learned graph;
   3. round with the original rule (ceil unless fraction < 0.35), clip to
-     [min, max] replicas and apply with `kubectl scale`.
+     [min, max] replicas and apply with `kubectl scale`;
+  4. trust threshold (paper Sec. IV-D: "Whenever the number of prediction errors or SLA violations
+     exceeds the threshold, the scheduler reduces trust in the model and becomes more conservative
+     in recycling resources"): if the end-to-end p95 latency violated the SLO in at least
+     --trust_k of the last --trust_window decisions, scale-in is blocked (only scale-out allowed)
+     for --trust_cooldown decisions. The paper gives no values; ours are fixed before the runs.
+     --trust_k 0 disables it (plain DeepScaler as in the authors' predict_scale.py).
 Remove the HPAs first (`kubectl delete hpa --all -n boutique`), otherwise the
 HPA and DeepScaler fight over the replica count.
 
@@ -24,7 +30,7 @@ import yaml
 
 from models import AdapGL
 from pipeline.collect import collect
-from pipeline.common import SERVICES
+from pipeline.common import ENTRY, NAMESPACE
 
 
 def scale_to_pods(pred, restriction=0.35):
@@ -37,12 +43,16 @@ def main():
     p.add_argument("--model_dir", required=True, help="out_dir of train.py")
     p.add_argument("--model_name", default="AdapGLA")
     p.add_argument("--prom", default="http://localhost:30090")
-    p.add_argument("--namespace", default="boutique")
+    p.add_argument("--namespace", default=NAMESPACE)
     p.add_argument("--period", type=int, default=None, help="seconds between decisions (default = data interval)")
     p.add_argument("--min_replicas", type=int, default=1)
     p.add_argument("--max_replicas", type=int, default=10)
     p.add_argument("--dry_run", action="store_true")
     p.add_argument("--log", default="Logs/autoscaler.jsonl")
+    p.add_argument("--slo", type=float, default=0.2, help="SLO on end-to-end p95 latency (s), trust threshold")
+    p.add_argument("--trust_k", type=int, default=3, help="violations in the window that cut trust (0 = off)")
+    p.add_argument("--trust_window", type=int, default=10, help="decisions looked back (10 x 30 s = 5 min)")
+    p.add_argument("--trust_cooldown", type=int, default=10, help="decisions without scale-in after a cut")
     a = p.parse_args()
 
     with open(os.path.join(a.model_dir, "config_used.yaml")) as f:
@@ -55,6 +65,7 @@ def main():
     step = int(meta["interval_s"] or 30)
     step_in = meta["step_in"]
     features = meta["features"]                  # same feature order as training
+    SERVICES = meta["services"]                  # same node order as training
     period = a.period or step
 
     device = torch.device("cpu")
@@ -67,10 +78,11 @@ def main():
 
     os.makedirs(os.path.dirname(a.log) or ".", exist_ok=True)
     print(f"DeepScaler autoscaler: step={step}s window={step_in} period={period}s dry_run={a.dry_run}")
+    viol_hist, no_scale_in = [], 0
     while True:
         t0 = time.time()
         end = t0 - t0 % step
-        df = collect(a.prom, a.namespace, end - (step_in + 2) * step, end, step,
+        df = collect(a.prom, a.namespace, end - (step_in + 2) * step, end, step, services=SERVICES,
                      metrics=features, verbose=False)
         if len(df) < step_in:
             print(f"only {len(df)} steps from Prometheus (need {step_in}), skipping this period")
@@ -84,14 +96,27 @@ def main():
         pred = np.nan_to_num(pred, nan=1.0)
         pods = np.clip(scale_to_pods(pred), a.min_replicas, a.max_replicas).astype(int)
         current = x[0, -1, :, 0].astype(int)
+        trusted = True
+        if a.trust_k > 0:                                    # Sec. IV-D trust threshold
+            lat = collect(a.prom, a.namespace, end - step, end, step, services=[ENTRY],
+                          metrics=["p95"], verbose=False)[f"{ENTRY}_p95"].to_numpy()[-1]
+            viol_hist = (viol_hist + [bool(lat > a.slo)])[-a.trust_window:]
+            if sum(viol_hist) >= a.trust_k:
+                no_scale_in = a.trust_cooldown
+            if no_scale_in > 0:
+                trusted = False
+                pods = np.maximum(pods, current)             # conservative recycling: no scale-in
+                no_scale_in -= 1
         for s, n_new, n_old in zip(SERVICES, pods, current):
             if n_new != n_old and not a.dry_run:
                 subprocess.run(["kubectl", "scale", "deployment", s, "-n", a.namespace,
                                 f"--replicas={n_new}"], check=False, capture_output=True)
-        rec = {"time": end, "pred": pred.round(3).tolist(), "pods": pods.tolist(), "current": current.tolist()}
+        rec = {"time": end, "pred": pred.round(3).tolist(), "pods": pods.tolist(), "current": current.tolist(),
+               "trusted": trusted, "recent_violations": int(sum(viol_hist))}
         with open(a.log, "a") as f:
             f.write(json.dumps(rec) + "\n")
-        print(time.strftime("%H:%M:%S"), dict(zip([s.replace("service", "") for s in SERVICES], pods.tolist())))
+        print(time.strftime("%H:%M:%S"), "" if trusted else "[no scale-in]",
+              dict(zip([s.replace("service", "") for s in SERVICES], pods.tolist())))
         time.sleep(max(0.0, period - (time.time() - t0)))
 
 
