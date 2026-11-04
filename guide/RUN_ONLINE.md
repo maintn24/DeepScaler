@@ -162,6 +162,24 @@ echo "END   $(date '+%Y-%m-%d %H:%M:%S')" | tee -a Logs/${RUN}_time.txt
 
 Khi Locust dừng, nhấn `Ctrl-C` ở cửa sổ autoscaler. Mỗi quyết định scale (dự đoán thô `pred`, số pod chọn `pods`, số pod hiện tại `current`) đã được ghi vào `Logs/<RUN>_autoscaler.jsonl`.
 
+## 4c. Chạy với model đã tune trên dữ liệu có burst (`ds_burst_tuned`, 04/11/2026)
+
+Model `model_states/ds_burst_tuned` được train trên `train_burst_20261104_0751`. Tham số được chọn theo tập validation (`experiments/RESULTS_free_tune_20261104.md`): cửa sổ 20 bước, 3 block, 50 epoch × 6 vòng, batch 32, ε 0,1, δ 0,2.
+
+Cách chạy giống bước 4b, chỉ đổi tên lần chạy và `MODEL_DIR`. Mỗi cặp DeepScaler + HPA chạy cùng trace FIFA 75 phút, cùng bắt đầu từ 1 pod mỗi service.
+
+| Lần chạy | Tên `RUN` | Autoscaler |
+|---|---|---|
+| DeepScaler đã tune | `online_dstuned_<ngày giờ>` | `MODEL_DIR=model_states/ds_burst_tuned deploy/04_run_deepscaler.sh` |
+| HPA đối chứng | `online_hpa_<ngày giờ>` | `deploy/02_boutique.sh` (tạo lại HPA), không chạy autoscaler |
+
+Nên chạy 2–3 cặp, xen kẽ thứ tự. So sánh theo Table II và Fig. 10:
+
+```bash
+python -m pipeline.compare_runs --slo 0.2 --warmup_min 10 --out reports/table2_dstuned \
+    DeepScaler=data/raw/online_dstuned_<1>.csv HPA=data/raw/online_hpa_<1>.csv ...
+```
+
 ## 5. Xuất metric và đo độ bất định của lần chạy
 
 Dùng đúng `START` và `END` trong `Logs/<RUN>_time.txt`. Ngoài 5 feature, `collect.py` còn thu thêm:
