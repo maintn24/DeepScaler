@@ -34,6 +34,9 @@ p.add_argument("--npas", default=None)
 p.add_argument("--out", default="grid")
 p.add_argument("--seeds", default="2021,2022,2023")
 p.add_argument("--no_baselines", action="store_true")
+p.add_argument("--strides", default="1,2", help="1 = 30 s, 2 = 60 s")
+p.add_argument("--splits", default="0.6,0.2,0.2;0.7,0.1,0.2")
+p.add_argument("--epoch_iters", default="1/1,5/5")
 a = p.parse_args()
 seeds = [int(s) for s in a.seeds.split(",")]
 os.makedirs(a.out, exist_ok=True)
@@ -50,7 +53,8 @@ def run(cmd, log):
 
 
 rows = []
-for stride, split in itertools.product([1, 2], ["0.6,0.2,0.2", "0.7,0.1,0.2"]):
+EI = [tuple(int(x) for x in e.split("/")) for e in a.epoch_iters.split(",")]
+for stride, split in itertools.product([int(x) for x in a.strides.split(",")], a.splits.split(";")):
     tag = f"i{30 * stride}_s{split.split(',')[0][2:]}"
     data_dir = f"{a.out}/data_{tag}"
     cmd = [sys.executable, "-m", "pipeline.build_dataset", "--raw", a.raw, "--od_adj", a.od, "--out_dir", data_dir,
@@ -59,7 +63,7 @@ for stride, split in itertools.product([1, 2], ["0.6,0.2,0.2", "0.7,0.1,0.2"]):
         cmd += ["--npas", a.npas]
     if not run(cmd, f"{a.out}/build_{tag}.log"):
         continue
-    for (ep, it), seed in itertools.product([(1, 1), (5, 5)], seeds):
+    for (ep, it), seed in itertools.product(EI, seeds):
         cfg = f"/tmp/tc_{seed}.yaml"
         yaml.safe_dump({**base_cfg, "seed": seed}, open(cfg, "w"))
         out = f"{a.out}/ds_{tag}_e{ep}i{it}_s{seed}"
