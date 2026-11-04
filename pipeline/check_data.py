@@ -69,7 +69,7 @@ def main():
         dem = np.maximum(1, np.ceil(d[[f"{s}_req" for s in SERVICES]].to_numpy() / mu))
         print(f"[demand label max(1, ceil(req/mu))] persistence MAE {np.abs(np.diff(dem, axis=0)).mean():.3f}, "
               f"max per service " + " ".join(str(int(x)) for x in dem.max(0)))
-    cpu = d[[f"{s}_cpu" for s in SERVICES]].sum(1) if f"{SERVICES[0]}_cpu" in d else None
+    cpu = d[[f"{s}_cpu" for s in SERVICES]].sum(axis=1) if f"{SERVICES[0]}_cpu" in d else None
     if cpu is not None:
         print(f"\n[CPU of the app containers] max {cpu.max():.2f} cores, p95 {cpu.quantile(.95):.2f} "
               f"(machine {a.cores:g}; sidecars + Locust + Prometheus come on top)")
