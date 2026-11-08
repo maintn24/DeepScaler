@@ -180,6 +180,28 @@ python -m pipeline.compare_runs --slo 0.2 --warmup_min 10 --out reports/table2_d
     DeepScaler=data/raw/online_dstuned_<1>.csv HPA=data/raw/online_hpa_<1>.csv ...
 ```
 
+## 4d. Chạy một lần bằng script: `deploy/05_online_run.sh` (khuyên dùng cho Table II)
+
+Script gộp các bước 4b/4c/5/6 cho **một** lần chạy, với bất kỳ autoscaler nào:
+1. Dựng lại cluster sạch (`FRESH=1`, mặc định).
+2. Đưa mọi service về 1 pod, chờ 2 phút.
+3. Bật autoscaler chạy nền.
+4. Chạy Locust 75 phút.
+5. Tắt autoscaler, rồi `collect` metric và call graph.
+
+```bash
+tmux new -s ds                     # hoặc tmux attach -t ds
+cd ~/DeepScaler && git pull
+deploy/05_online_run.sh slo        # hoặc: mmn | hpa | ds
+```
+
+- Lệnh tự dừng sau khoảng 1 giờ 40 phút và in ra tên file CSV cùng số dòng (khoảng 151).
+- Trong lúc chạy có thể `Ctrl-b d` rồi tắt SSH.
+- Theo dõi bằng `tail -f Logs/$(cat Logs/CURRENT_RUN)_console.log`. Riêng HPA không có log autoscaler, nên xem bằng `kubectl -n boutique get hpa`.
+- Chạy liên tiếp nhiều lần: `deploy/05_online_run.sh slo && deploy/05_online_run.sh mmn`. Đợt sau đổi thứ tự.
+
+Chi tiết từng baseline (SLO [48], MMN [33], AWS [47]) và lệnh so sánh: `guide/EXPERIMENTS.md`, mục D.
+
 ## 5. Xuất metric và đo độ bất định của lần chạy
 
 Dùng đúng `START` và `END` trong `Logs/<RUN>_time.txt`. Ngoài 5 feature, `collect.py` còn thu thêm:

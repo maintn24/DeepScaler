@@ -12,7 +12,10 @@ Metrics (paper Sec. III / V-A):
                      instance (CPU limit of the app container in the manifest).
   CAE (seconds)    : cumulative absolute error of the end-to-end latency w.r.t. the SLO,
                      sum_t |RT_t - SLO|. The paper reports CAE in seconds without a formula; this is
-                     our reading, stated in the thesis.
+                     our reading, stated in the thesis. Caveat: it also grows when latency is far
+                     BELOW the SLO, so a faster system can get a larger CAE.
+  CAE_over (s)     : one-sided version, sum_t max(0, RT_t - SLO): only the excess over the SLO
+                     (how badly the SLA is violated), reported next to CAE.
 Also: violation rate for a range of SLOs (the paper gives no SLO value) and Fig. 10-style
 cumulative curves. The first --warmup_min minutes of every run are skipped (model window filling).
 """
@@ -33,7 +36,9 @@ def run_metrics(df, cores, slo, step):
     cost_t = (pods * cores).sum(1) * step / 3600                       # core-hours per step
     viol_t = (lat > slo).to_numpy()
     cae_t = (lat - slo).abs().to_numpy()
+    over_t = (lat - slo).clip(lower=0).to_numpy()
     return {"violation_rate_%": 100 * viol_t.mean(), "cost_core_h": cost_t.sum(), "CAE_s": cae_t.sum(),
+            "CAE_over_s": over_t.sum(),
             "pod_hours": pods.sum() * step / 3600, "p95_median_ms": 1000 * lat.median(),
             "minutes": len(df) * step / 60}, viol_t, cost_t, cae_t
 
@@ -65,7 +70,7 @@ def main():
     per_run = pd.DataFrame(rows)
     per_run.to_csv(f"{a.out}/per_run.csv", index=False)
     g = per_run.groupby("label")
-    keys = ["violation_rate_%", "cost_core_h", "CAE_s"]
+    keys = ["violation_rate_%", "cost_core_h", "CAE_s", "CAE_over_s"]
     table = pd.DataFrame({k: g[k].mean().map("{:.3f}".format) + " ± " + g[k].std(ddof=0).fillna(0).map("{:.3f}".format)
                           for k in keys})
     table["runs"] = g.size()

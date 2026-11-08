@@ -138,29 +138,54 @@ Dùng notebook `notebooks/DeepScaler_train_colab_kaggle.ipynb` cho từng ứng 
 
 ## D. Table II / Fig. 9–10: autoscaling online (Boutique)
 
-Cả 4 autoscaler đều dùng cùng trace FIFA, chạy 75 phút, bắt đầu với 1 pod mỗi service. Chỉ đổi lệnh ở **cửa sổ 1** của bước 4b trong `RUN_ONLINE.md`:
+Các baseline của Table II (Sec. V-B): AWS [47], MMN [33], HAB [35], SLO [48].
+- Mọi autoscaler dùng cùng trace FIFA, chạy 75 phút, bắt đầu với 1 pod mỗi service.
+- SLA là 200 ms trên p95 của frontend.
+- Bỏ 10 phút đầu khi tính chỉ số.
 
-| Autoscaler | Cửa sổ 1 |
-|---|---|
-| **DeepScaler** (có trust threshold, Sec. IV-D) | `LOG=Logs/${RUN}_autoscaler.jsonl MODEL_DIR=model_states/ds_s2021 deploy/04_run_deepscaler.sh` (mặc định `--trust_k 3 --trust_window 10 --trust_cooldown 10 --slo 0.2`) |
-| DeepScaler không có trust threshold (ablation) | thêm `AUTOSCALER_ARGS="--trust_k 0"` vào trước lệnh trên |
-| **AWS** [47] ≈ HPA CPU 50 % | `deploy/02_boutique.sh` (tạo lại HPA), không có cửa sổ 1 |
-| **SLO** [48] | `kubectl -n boutique delete hpa --all; python -m pipeline.rule_autoscalers --policy slo --slo 0.2 --ref_csv data/raw/run2_hpa_5f.csv --log Logs/${RUN}_autoscaler.jsonl` |
-| **MMN** [33] | `kubectl -n boutique delete hpa --all; python -m pipeline.rule_autoscalers --policy mmn --slo 0.2 --mu reports/mu.json --ref_csv data/raw/run2_hpa_5f.csv --log Logs/${RUN}_autoscaler.jsonl` |
-| HAB [35] | không làm (mạng hàng đợi cân bằng, rất khó cài lại đúng; ghi vào phần hạn chế) |
+| Autoscaler | Trong báo | Cách dựng lại ở đây | Lệnh |
+|---|---|---|---|
+| **DeepScaler** | đề xuất của báo | `pipeline/autoscaler.py`, model `model_states/ds_burst_tuned`, trust threshold (Sec. IV-D) | `deploy/05_online_run.sh ds` |
+| **AWS** [47] | *"emulates Amazon Auto-Scaling Services"*, luật theo CPU | Kubernetes HPA, CPU 50 % (target tracking). Không dùng được AWS Auto Scaling thật, vì nó không scale pod trong cluster kind | `deploy/05_online_run.sh hpa` |
+| **SLO** [48] | luật theo response time, chia nhỏ SLO | `rule_autoscalers.py --policy slo`: chia SLA end-to-end theo tỉ lệ latency của từng service trong một lần chạy HPA tham chiếu (`REF_CSV`); p95 của service > SLA cục bộ thì +1 pod; 4 chu kỳ liền < 0,5 × SLA cục bộ thì −1 pod | `deploy/05_online_run.sh slo` |
+| **MMN** [33] | hàng đợi M/M/n/PS cho từng service, không holistic | `rule_autoscalers.py --policy mmn`: tốc độ phục vụ = μ / 0,5 (`reports/mu.json`); chọn n nhỏ nhất sao cho R(n) ≤ SLA cục bộ và ρ ≤ 0,8. Nếu SLA cục bộ nhỏ hơn thời gian phục vụ, chỉ dùng ρ ≤ 0,8 | `deploy/05_online_run.sh mmn` |
+| HAB [35] | mạng hàng đợi cân bằng, holistic | **không làm** (báo không mô tả đủ để dựng lại đúng; ghi vào hạn chế) | – |
+| (ablation) DeepScaler không có trust threshold | – | `AUTOSCALER_ARGS="--trust_k 0"` với `deploy/04_run_deepscaler.sh` | chạy tay theo `RUN_ONLINE.md` bước 4b |
 
-Mỗi autoscaler chạy **3 lần**, xen kẽ thứ tự. Để rút ngắn thời gian, có thể bật nhiều máy c6i.2xlarge **cùng loại**, mỗi máy một autoscaler. Sau mỗi lần chạy: `collect` (bước 5 của `RUN_ONLINE.md`). Khi đã đủ tất cả các lần chạy:
+### Thứ tự và số lần chạy
+
+Các lần chạy 04/11 và 08/11 cho thấy **lần chạy đầu tiên trên một cluster luôn tốt hơn 3–5 điểm phần trăm**. Mức này lớn hơn khác biệt giữa các autoscaler. Vì vậy:
+- **Dựng lại cluster trước mỗi lần chạy.** Đây là mặc định của `deploy/05_online_run.sh` (`FRESH=1`, thêm khoảng 15–20 phút mỗi lần).
+- **Đổi thứ tự giữa các đợt.** Ví dụ đợt 1: SLO → MMN; đợt 2: MMN → SLO.
+- Mỗi autoscaler chạy ít nhất 2 lần. Báo cáo mean ± std, ghi rõ n.
+
+Mỗi lần `deploy/05_online_run.sh` mất khoảng 1 giờ 40 phút: dựng cluster, chờ 2 phút, Locust 75 phút, collect. Kết quả là `data/raw/online_<autoscaler>_<ngày giờ>.csv` (khoảng 151 dòng), cùng log autoscaler và log Locust trong `Logs/`.
+
+Biến môi trường: `FRESH=0` để dùng lại cluster hiện có; `REF_CSV=...` để chọn lần chạy HPA tham chiếu cho SLO/MMN (mặc định là file `online_hpa_*.csv` mới nhất); `SLO=0.2`; `MODEL_DIR=...`.
+
+### So sánh
 
 ```bash
-python -m pipeline.compare_runs --slo 0.2 --warmup_min 10 --out reports/table2 \
-   DeepScaler=data/raw/online_ds_1.csv DeepScaler=data/raw/online_ds_2.csv DeepScaler=data/raw/online_ds_3.csv \
-   AWS=data/raw/online_hpa_1.csv ... SLO=... MMN=...
+python -m pipeline.compare_runs --slo 0.2 --warmup_min 10 --out reports/table2_full \
+   DeepScaler=data/raw/online_dstuned_20261104_1637.csv DeepScaler=data/raw/online_dstuned_20261108_1704.csv \
+   AWS=data/raw/online_hpa_20261104_1802.csv AWS=data/raw/online_hpa_20261108_1548.csv \
+   SLO=data/raw/online_slo_<1>.csv SLO=data/raw/online_slo_<2>.csv \
+   MMN=data/raw/online_mmn_<1>.csv MMN=data/raw/online_mmn_<2>.csv
 ```
 
 Kết quả gồm:
-- `table2.csv`: tỉ lệ vi phạm (eq. 1), core-hours (eq. 2) và CAE, dạng mean ± std như Table II.
+- `table2.csv`: tỉ lệ vi phạm (eq. 1), core-hours (eq. 2), CAE = Σ|p95 − SLO| và `CAE_over` = Σ max(0, p95 − SLO), dạng mean ± std.
+  - CAE như báo (không có công thức trong báo) cũng tăng khi latency thấp hơn SLA nhiều. Vì vậy báo cáo cả `CAE_over`.
 - `slo_sweep.csv`: tỉ lệ vi phạm theo từng mức SLO.
 - `fig10_cumulative.png`: các đường cộng dồn như Fig. 10.
+
+### Kết quả đã có
+
+| Autoscaler | Lần chạy | Vi phạm 200 ms | Chi phí (core-h) |
+|---|---|---|---|
+| DeepScaler (ds_burst_tuned) | 04/11 16:37 (chạy trước), 08/11 17:04 (cluster mới, chạy sau) | 13,4 ± 1,1 % | 5,06 ± 0,22 |
+| AWS (HPA) | 04/11 18:02 (chạy sau), 08/11 15:48 (cluster mới, chạy trước) | 14,1 ± 5,0 % | 5,17 ± 0,01 |
+| *(đã loại)* | DS 04/11 21:10 (lỗi), HPA 04/11 19:43 (bỏ theo cặp) | – | – |
 
 ## D2. Burst
 

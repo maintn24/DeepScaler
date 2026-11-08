@@ -16,6 +16,12 @@ documented here so the thesis can state exactly what was compared:
        lambda_i / (n s_i) <= rho_max is applied every period.
   (AWS [47], CPU target tracking, = Kubernetes HPA with CPU 50 %: deploy/02_*.sh.)
 
+Checked offline on online_hpa_20261104_1802 (SLO 200 ms): local SLOs frontend 200, checkout 200,
+cart 72, recommendation 20, other services 10 ms (share floor 0.05). MMN then gives on average
+frontend 4.1, checkout 2.3, currency 2.1, productcatalog 2.3 pods. checkoutservice's own p95 is
+~200 ms (it calls 6 services), so the slo policy will keep scaling it out: an expected behaviour
+of SLO decomposition (the paper's SLO baseline also has the highest cost, Table II).
+
 Both log one JSON line per decision (same format as pipeline/autoscaler.py, without "pred").
 
   python -m pipeline.rule_autoscalers --policy slo --slo 0.2 --ref_csv data/raw/run2_hpa_5f.csv
@@ -23,6 +29,7 @@ Both log one JSON line per decision (same format as pipeline/autoscaler.py, with
 """
 import argparse
 import json
+import math
 import os
 import subprocess
 import time
@@ -45,6 +52,11 @@ def local_slos(ref_csv, slo):
 
 
 def mmn_pods(lam, s_rate, target, rho_max, lo, hi):
+    """Smallest n with rho <= rho_max and R(n) <= target. If the target is below the service time
+    1/s (unreachable for any n, e.g. a 10 ms local SLO for a service that needs 11.5 ms per request),
+    only the utilisation bound rho <= rho_max is used, instead of jumping to the maximum."""
+    if 1.0 / s_rate >= target:
+        return int(min(hi, max(lo, math.ceil(lam / (rho_max * s_rate)))))
     for n in range(lo, hi + 1):
         rho = lam / (n * s_rate)
         if rho < 1 and rho <= rho_max and (1.0 / s_rate) / (1 - rho) <= target:
