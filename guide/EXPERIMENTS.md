@@ -179,13 +179,38 @@ Kết quả gồm:
 - `slo_sweep.csv`: tỉ lệ vi phạm theo từng mức SLO.
 - `fig10_cumulative.png`: các đường cộng dồn như Fig. 10.
 
-### Kết quả đã có
+### Kết quả đã có (đợt 04–09/11/2026, n = 2 mỗi autoscaler)
 
-| Autoscaler | Lần chạy | Vi phạm 200 ms | Chi phí (core-h) |
-|---|---|---|---|
-| DeepScaler (ds_burst_tuned) | 04/11 16:37 (chạy trước), 08/11 17:04 (cluster mới, chạy sau) | 13,4 ± 1,1 % | 5,06 ± 0,22 |
-| AWS (HPA) | 04/11 18:02 (chạy sau), 08/11 15:48 (cluster mới, chạy trước) | 14,1 ± 5,0 % | 5,17 ± 0,01 |
-| *(đã loại)* | DS 04/11 21:10 (lỗi), HPA 04/11 19:43 (bỏ theo cặp) | – | – |
+| Autoscaler | Vi phạm 200 ms | Chi phí (core-h) | CAE (s) | CAE_over (s) | Lần chạy |
+|---|---|---|---|---|---|
+| **DeepScaler** (ds_burst_tuned) | **13,4 ± 1,1 %** | 5,06 ± 0,22 | **12,8 ± 0,9** | 1,25 ± 0,20 | 04/11 16:37; 08/11 17:04 |
+| SLO [48] | 13,7 ± 2,3 % | 5,57 ± 0,02 | 13,0 ± 0,1 | **1,17 ± 0,09** | 08/11 19:16; 08/11 23:46 |
+| AWS [47] (HPA CPU 50 %) | 14,1 ± 5,0 % | 5,17 ± 0,01 | 14,4 ± 1,5 | 1,49 ± 0,35 | 04/11 18:02; 08/11 15:48 |
+| MMN [33] | 21,0 ± 1,1 % | **4,12 ± 0,01** | 15,0 ± 0,6 | 4,20 ± 0,11 | 08/11 20:37; 08/11 22:26 |
+| *(đã loại)* | – | – | – | – | DS 04/11 21:10 (lỗi); HPA 04/11 19:43 (bỏ theo cặp) |
+
+Bảng chi tiết, đường cộng dồn kiểu Fig. 10 và tỉ lệ vi phạm theo ngưỡng SLA nằm trong `reports/table2_full/`.
+
+**So với Table II của báo (không có HAB):**
+- **Vi phạm SLA:** DS 13,4 < SLO 13,7 < AWS 14,1 < MMN 21,0. Thứ tự **giống hệt báo** (DS 3,8 < SLO 6,0 < AWS 7,3 < MMN 8,0). Tuy nhiên chênh lệch giữa DS, SLO và AWS nhỏ hơn độ lệch chuẩn. Chỉ khác biệt với MMN là rõ ràng.
+- **CAE:** DS thấp nhất và MMN cao nhất, **giống báo**.
+- **Chi phí:** DS < AWS < SLO, **giống báo**, SLO đắt nhất. MMN rẻ nhất, khác báo, vì cách dựng lại MMN ở đây cấp ít pod (ρ ≤ 0,8 với tốc độ phục vụ μ/0,5). Vì vậy MMN vi phạm nhiều nhất và có CAE_over gấp khoảng 3,5 lần các autoscaler khác.
+
+**Mức cải thiện trung bình của DeepScaler so với các baseline** (cách tính của báo: trung bình mức cải thiện so với từng baseline):
+
+| | So với AWS | So với SLO | So với MMN | Trung bình | Báo |
+|---|---|---|---|---|---|
+| Vi phạm | −5 % | −3 % | −36 % | **−15 %** | −41 % |
+| Chi phí | −2 % | −9 % | +23 % | **+4 %** | −23 % |
+| CAE | −11 % | −2 % | −15 % | **−9 %** | −13 % |
+
+**Kết luận:** thứ tự của các autoscaler và các xu hướng chính (DS dẫn đầu về vi phạm và CAE, SLO đắt nhất, MMN vi phạm nhiều nhất) được tái lập. Mức ưu thế của DeepScaler nhỏ hơn báo nhiều. So với SLO và AWS, chênh lệch nằm trong mức dao động giữa các lần chạy.
+
+**Hạn chế:**
+- n = 2 mỗi autoscaler.
+- Hai lần DS/AWS ngày 04/11 không chạy trên cluster mới; SLO và MMN đều chạy trên cluster mới.
+- Các tham số `target_util` 0,5, `rho_max` 0,8, `down` 0,5 và `down_steps` 4 là do mình chọn; báo không ghi.
+- HAB [35] không dựng lại được.
 
 ## D2. Burst
 
