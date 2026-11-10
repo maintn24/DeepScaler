@@ -1,5 +1,7 @@
 # Chạy DeepScaler online trên EC2
 
+> **Cấu trúc thư mục (10/11/2026):** mỗi lần chạy online/profiling nằm trong `runs/<campaign>/<RUN>/` (xem `runs/README.md`, danh mục `runs/INDEX.md`). Các lần chạy cũ đã chuyển sang `runs/v1_istio-p95/`, kết quả cũ sang `reports/v1_istio-p95/`. Các bước thủ công cũ (4b, 4c, 5) vẫn ghi vào `Logs/` và `data/raw/`; khi chạy xong hãy chuyển vào `runs/v2_exact/<RUN>/`. Checklist chạy lại: `guide/RERUN_CHECKLIST.md`.
+
 Hướng dẫn chạy model DeepScaler đã train (`model_states/ds_s2021`) làm autoscaler thật cho Online Boutique, thay cho HPA. Các bước gồm: SSH vào EC2, tải repo, dựng cluster, chạy autoscaler và phát tải.
 
 - Môi trường **phải giống lúc thu dữ liệu**: EC2 **c6i.2xlarge** (8 vCPU, 16 GB), Ubuntu 22.04/24.04, ổ gp3 50 GB, kind + Istio 1.22.3, trace FIFA với `SCALE=1`.
@@ -125,6 +127,28 @@ deploy/07_profile_sla.sh            # -> reports/mu_sla.json, rồi dùng MU=rep
 ```
 Service nào có `censored: true` thì μ của nó chỉ là cận dưới, do tải chưa đủ lớn: tăng `HI` hoặc giảm `OTHER` rồi chạy lại cho service đó (`TARGETS="..."`).
 
+## 3d. Hướng tối ưu của luận văn: ACI toàn ứng dụng + SLA pacer (10/11/2026)
+
+DeepScaler gốc **giữ nguyên**: `pipeline/autoscaler.py` (luật làm tròn 0.35 + trust threshold), chạy bằng `05_online_run.sh ds`. Hướng mới là chế độ riêng `aci`, dùng cùng mô hình STGNN và chỉ thay bước "dự báo -> số replica" (`pipeline/aci.py`, `pipeline/aci_autoscaler.py`).
+
+1. Dữ liệu huấn luyện trên nhãn nhu cầu (O1). Bản gốc dùng `--features pod,...`:
+   ```bash
+   python -m pipeline.build_dataset --raw data/raw/train_burst_20261104_0751.csv --split_by target \
+       --features demand,cpu,res,req,mem --mu reports/mu_sla.json --out_dir data/boutique_demand
+   ```
+   Train như cũ (Colab/Kaggle) với `data/boutique_demand`, ra ví dụ `model_states/ds_demand`.
+2. Kiểm tra offline: luật gốc và ACI dùng cùng một dự báo, cấp phát giả định không trễ, không phản hồi SLA:
+   ```bash
+   python -m pipeline.aci_replay --csv data/raw/train_burst_20261104_0751.csv --mu reports/mu_sla.json --alpha 0.05
+   python -m pipeline.aci_replay ... --forecaster model --model_dir model_states/ds_demand
+   ```
+3. Chạy online, mỗi lần chạy so với `ds` (gốc) và `hpa`:
+   ```bash
+   ACI_MODEL_DIR=model_states/ds_demand EPS=0.05 deploy/05_online_run.sh aci
+   ACI_MODEL_DIR=model_states/ds_demand PACER=off deploy/05_online_run.sh aci   # ablation: chỉ ACI, α cố định
+   ```
+   Log ở `Logs/RUN_autoscaler.jsonl` gồm alpha, beta, Q, missed, violated, p0/p1 cho từng quyết định.
+
 ## 4. Chạy DeepScaler
 
 Đưa tất cả service về 1 pod để lần chạy nào cũng bắt đầu từ cùng trạng thái:
@@ -196,7 +220,7 @@ Nên chạy 2–3 cặp, xen kẽ thứ tự. So sánh theo Table II và Fig. 10
 
 ```bash
 python -m pipeline.compare_runs --slo 0.2 --warmup_min 10 --out reports/table2_dstuned \
-    DeepScaler=data/raw/online_dstuned_<1>.csv HPA=data/raw/online_hpa_<1>.csv ...
+    DeepScaler=runs/v2_exact/online_ds_<1>/online_ds_<1>.csv HPA=runs/v2_exact/online_hpa_<1>/online_hpa_<1>.csv ...
 ```
 
 ## 4d. Chạy một lần bằng script: `deploy/05_online_run.sh` (khuyên dùng cho Table II)
@@ -295,9 +319,10 @@ Chạy trên máy của bạn:
 
 ```bash
 cd ~/Projects/DeepScaler
-scp -i <KEY.pem> "ubuntu@<EC2_IP>:~/DeepScaler/data/raw/{online_*,profile*}" data/raw/
-scp -i <KEY.pem> "ubuntu@<EC2_IP>:~/DeepScaler/Logs/{online_*,profile*}" Logs/
-scp -i <KEY.pem> -r "ubuntu@<EC2_IP>:~/DeepScaler/reports" .
+scp -i <KEY.pem> -r "ubuntu@<EC2_IP>:~/DeepScaler/runs/v2_exact" runs/      # mọi lần chạy từ 10/11 (05, 07)
+scp -i <KEY.pem> "ubuntu@<EC2_IP>:~/DeepScaler/reports/mu_sla.json" reports/
+scp -i <KEY.pem> "ubuntu@<EC2_IP>:~/DeepScaler/data/raw/{profile*,train_*}" data/raw/   # chỉ khi thu dữ liệu train mới
+python -m pipeline.index_runs                                                        # cập nhật runs/INDEX.md
 ```
 
 Dữ liệu Prometheus nằm **trong cluster**. Phải chạy `collect.py` (bước 5) cho **mọi** lần chạy và kiểm tra file đã về đủ, rồi mới **Stop/Terminate** instance trên AWS Console. Tắt máy là mất hết, không thu lại được. EC2 tính tiền theo giờ chạy.

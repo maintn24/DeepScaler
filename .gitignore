@@ -11,3 +11,11 @@ data/c20*/
 Logs/run*_locust*
 reports/
 third_party/
+
+# per-run folders (large); the catalogue and the hand-written notes are tracked
+runs/*/
+!runs/INDEX.csv
+!runs/INDEX.md
+!runs/notes.csv
+!runs/README.md
+_to_delete/

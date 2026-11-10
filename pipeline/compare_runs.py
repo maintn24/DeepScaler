@@ -1,8 +1,9 @@
 """Table II / Fig. 10 of the DeepScaler paper from several online runs (pipeline/collect.py CSVs).
 
   python -m pipeline.compare_runs --slo 0.2 --warmup_min 10 --out reports/table2 \
-      DeepScaler=data/raw/online_deepscaler_20261023_0149.csv HPA=data/raw/online_hpa_20261023_0506.csv \
-      DeepScaler=data/raw/<another DeepScaler run>.csv ...
+      DeepScaler=runs/v2_exact/online_ds_<stamp>/online_ds_<stamp>.csv \
+      HPA=runs/v2_exact/online_hpa_<stamp>/online_hpa_<stamp>.csv DeepScaler=<another ds run>.csv ...
+  (old runs: runs/v1_istio-p95/<RUN>/<RUN>.csv; their latency is interpolated -> lat_source istio~)
 (repeat a label for repeated runs -> mean +- std, as in Table II)
 
 Metrics (paper Sec. III / V-A):

@@ -10,6 +10,15 @@ Output (in --out_dir):
 
 Same windowing as the original prepareData.py: x = the `step_in` most recent
 steps of all features, y = pod count (feature 0) of the next `horizon` steps.
+
+Thesis option (objective O1, 10/11/2026): feature 0 may be "demand" instead of "pod":
+  demand_i(t) = max(1, ceil(req_i(t) / mu_i)), mu_i from --mu (reports/mu_sla.json or reports/mu.json).
+The model then forecasts the replicas the load needs, not the replicas the autoscaler that ran during
+data collection chose (DeepScaler's label y_t^i = x_{t+1}^{c,i}, paper Sec. III-A). The mu values are
+saved in meta.json so that the online autoscaler computes the same channel.
+  python -m pipeline.build_dataset --raw data/raw/X.csv --features demand,cpu,res,req,mem \
+      --mu reports/mu_sla.json --out_dir data/boutique_demand
+ORIGINAL behaviour (DeepScaler, kept): --features pod,cpu,res,req,mem (default), no --mu.
 Splits are chronological (no shuffling) so test data is strictly "future".
 """
 import argparse
@@ -22,8 +31,25 @@ import pandas as pd
 from pipeline.common import FEATURES, SERVICES, TARGET_FEATURE, call_graph_adj
 
 
-def load_raw(csv_path, services=SERVICES, features=FEATURES):
+def load_mu(path):
+    raw = json.load(open(path))
+    return {s: float(raw[s]["mu"] if isinstance(raw[s], dict) else raw[s]) for s in raw}
+
+
+def add_demand(df, mu, services=SERVICES):
+    """demand = max(1, ceil(req / mu)) per service (thesis O1); returns a copy with <svc>_demand columns."""
+    df = df.copy()
+    for s in services:
+        df[f"{s}_demand"] = np.maximum(1.0, np.ceil(df[f"{s}_req"].fillna(0.0).to_numpy() / mu[s]))
+    return df
+
+
+def load_raw(csv_path, services=SERVICES, features=FEATURES, mu=None):
     df = pd.read_csv(csv_path)
+    if "demand" in features:                    # thesis option; original DeepScaler never takes this branch
+        if mu is None:
+            raise ValueError("feature 'demand' needs --mu")
+        df = add_demand(df, mu, services)
     missing = [f"{s}_{f}" for s in services for f in features if f"{s}_{f}" not in df.columns]
     if missing:
         raise ValueError(f"CSV is missing columns: {missing[:5]}...")
@@ -79,6 +105,7 @@ def main():
     p.add_argument("--step_in", type=int, default=20, help="history length (original repo: 80)")
     p.add_argument("--horizon", type=int, default=1, help="steps to predict (original repo: 1)")
     p.add_argument("--split", default="0.7,0.1,0.2")
+    p.add_argument("--mu", default=None, help="mu json for the 'demand' feature (thesis O1)")
     p.add_argument("--features", default=",".join(FEATURES),
                    help="input features, first must be 'pod' (target). Paper: pod,cpu,res,req,mem; "
                         "original predict_scale.py: pod,cpu,res,req")
@@ -95,8 +122,11 @@ def main():
     a = p.parse_args()
 
     features = [f.strip() for f in a.features.split(",")]
-    assert features[0] == "pod", "feature 0 must be 'pod' (prediction target)"
-    data, interval = load_raw(a.raw, features=features)
+    # ORIGINAL: assert features[0] == "pod", "feature 0 must be 'pod' (prediction target)"
+    #           data, interval = load_raw(a.raw, features=features)
+    assert features[0] in ("pod", "demand"), "feature 0 is the prediction target: 'pod' (original) or 'demand'"
+    mu = load_mu(a.mu) if a.mu else None
+    data, interval = load_raw(a.raw, features=features, mu=mu)
     if a.stride > 1:
         data = data[::a.stride]
         interval = interval * a.stride if interval else None
@@ -137,6 +167,9 @@ def main():
             "interval_s": interval, "step_in": a.step_in, "horizon": a.horizon, "stride": a.stride,
             "split": a.split, "split_by": a.split_by,
             "raw": os.path.abspath(a.raw), "samples": sizes}
+    if "demand" in features:                     # the online autoscaler must build the same channel
+        meta["mu"] = mu
+        meta["mu_file"] = os.path.abspath(a.mu)
     with open(os.path.join(a.out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
     print("saved to", a.out_dir)

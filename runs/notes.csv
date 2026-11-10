@@ -1,0 +1,15 @@
+run,status,used_in,note
+online_deepscaler_20261023_0149,ref,reports/v1_istio-p95/table2_20261023,Table II đầu tiên; model ds_s2021 (trước khi tune)
+online_hpa_20261023_0506,ref,reports/v1_istio-p95/table2_20261023,HPA đối chứng của table2_20261023
+online_dstuned_20261104_1637,ref,reports/v1_istio-p95/table2_full; table2_dstuned; load_analysis,DS tuned (ds_burst_tuned) cặp 1
+online_dstuned_20261104_2110,excluded,reports/v1_istio-p95/table2_dstuned,lần chạy bị lỗi; loại khỏi load_analysis và table2_full
+online_dstuned_20261108_1704,ref,reports/v1_istio-p95/table2_full,DS tuned lần 2 (FRESH)
+online_hpa_20261104_1802,ref,reports/v1_istio-p95/table2_full; table2_dstuned; load_analysis,HPA cặp 1
+online_hpa_20261104_1943,ref,reports/v1_istio-p95/table2_dstuned,HPA cặp 2
+online_hpa_20261108_1548,ref,reports/v1_istio-p95/table2_full,HPA lần 2 (FRESH)
+online_mmn_20261108_1900,failed,,dừng sau ~5 phút; không có CSV
+online_mmn_20261108_2037,ref,reports/v1_istio-p95/table2_full,MMN lần 1
+online_mmn_20261108_2226,ref,reports/v1_istio-p95/table2_full,MMN lần 2
+online_slo_20261108_1851,failed,,dừng sau ~5 phút; không có CSV
+online_slo_20261108_1916,ref,reports/v1_istio-p95/table2_full,SLO lần 1
+online_slo_20261108_2346,ref,reports/v1_istio-p95/table2_full,SLO lần 2
