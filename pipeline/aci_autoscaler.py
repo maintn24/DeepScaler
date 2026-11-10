@@ -91,6 +91,17 @@ def main():
     p.add_argument("--m", type=int, default=120)
     p.add_argument("--c", type=float, default=1.0)
     p.add_argument("--rho", type=float, default=0.05)
+    # outer-loop step sizes. Design (tex Sec. 2.4, "On dinh giua hai vong"): the outer loop must be slower
+    # than the inner one, eta*|e| << gamma. |e| <= 1 - eps, so eta_tight = gamma/2 keeps eta*|e| <= gamma/2.
+    # ORIGINAL (before 10/11/2026 review): SLAPacer defaults eta_tight=0.02, eta_relax=0.002 (> gamma=0.01).
+    p.add_argument("--eta_tight", type=float, default=0.005)
+    p.add_argument("--eta_relax", type=float, default=0.0005)
+    p.add_argument("--a_min", type=float, default=0.01)
+    p.add_argument("--a_max", type=float, default=0.5)
+    p.add_argument("--pacer_window", type=int, default=120, help="steps of the rolling violation rate")
+    p.add_argument("--viol_win", type=int, default=None,
+                   help="seconds of the Istio window for the per-step violation v_t (default 2 x step, "
+                        "as before; = step matches the design's 'p95 within step t' but needs >= 2 scrapes)")
     p.add_argument("--down_steps", type=int, default=3)
     p.add_argument("--max_down", type=int, default=1)
     p.add_argument("--dry_run", action="store_true")
@@ -125,7 +136,11 @@ def main():
         act = np.array([s in a.active.split(",") for s in services])
     alpha0 = a.alpha if a.alpha is not None else a.eps
     aci = AppACI(act, m=a.m, gamma=a.gamma, c=a.c, beta0=alpha0, warm_scores=warm[-a.m:])
-    pacer = SLAPacer(a.eps, int(a.period_min * 60 / step), enabled=(a.pacer == "on"), alpha_fixed=alpha0)
+    pacer = SLAPacer(a.eps, int(a.period_min * 60 / step), window=a.pacer_window, eta_tight=a.eta_tight,
+                     eta_relax=a.eta_relax, a_min=a.a_min, a_max=a.a_max,
+                     enabled=(a.pacer == "on"), alpha_fixed=alpha0)
+    # ORIGINAL: pacer = SLAPacer(a.eps, int(a.period_min * 60 / step), enabled=(a.pacer == "on"), alpha_fixed=alpha0)
+    viol_win = a.viol_win or 2 * step
     sched = Scheduler(N, a.min_replicas, a.max_replicas, a.down_steps, a.max_down)
     slo_ms = int(round(a.slo * 1000))
     print(f"ACI autoscaler: step={step}s active={[s for s, f in zip(services, act) if f]} "
@@ -147,7 +162,7 @@ def main():
             running = df[[f"{s}_pod" for s in services]].to_numpy()[-1]
             lat = collect(a.prom, a.namespace, end - step, end, step, services=[ENTRY], metrics=["p95"],
                           verbose=False)[f"{ENTRY}_p95"].to_numpy()[-1]
-            slow = query_range(a.prom, SLOW_TEMPLATE.format(ns=a.namespace, svc=ENTRY, ms=slo_ms, win=f"{2 * step}s"),
+            slow = query_range(a.prom, SLOW_TEMPLATE.format(ns=a.namespace, svc=ENTRY, ms=slo_ms, win=f"{viol_win}s"),
                                end - step, end, step).get(float(end))
             violated = bool(slow > 0.05) if slow is not None and np.isfinite(slow) else bool(lat > a.slo)
             # 1. feedback for the previous decision (its target step has just ended)
@@ -173,6 +188,9 @@ def main():
             tag = ""
         except Exception as ex:                               # fail-safe: keep current replicas
             rec.update(hold=True, error=repr(ex)[:200])
+            # the pending forecast was for the step that just ended; next period would compare it with the
+            # demand one step later. Drop it (no ACI update for this decision). ORIGINAL: pending kept.
+            pending = None
             tag = "[hold] " + repr(ex)[:80]
         with open(a.log, "a") as f:
             f.write(json.dumps(rec, default=float) + "\n")

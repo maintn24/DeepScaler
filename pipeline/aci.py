@@ -52,16 +52,23 @@ class AppACI:
         j = min(len(s), math.ceil((len(s) + 1) * (1 - self.beta)))
         return s[j - 1]
 
+    @staticmethod
+    def _yh(yhat):
+        """Forecast floored at 1 replica (demand >= 1 by definition). The design needs yhat + c > 0:
+        a model can output negative values, and then (yhat + c) Q - c no longer bounds n when S <= Q.
+        ORIGINAL (before 10/11/2026 review): no floor, np.asarray(yhat, float)."""
+        return np.maximum(np.asarray(yhat, float), 1.0)
+
     def upper(self, yhat):
         q = self.quantile()
         if math.isinf(q):
             return np.full(len(yhat), np.inf)
-        return (np.asarray(yhat, float) + self.c) * q - self.c
+        return (self._yh(yhat) + self.c) * q - self.c
 
     def observe(self, yhat, n, deployed, alpha_target):
         """Feedback for one past decision: forecast yhat, realised demand n, replicas actually deployed."""
         n, deployed = np.asarray(n, float), np.asarray(deployed, float)
-        s = float(ratio_score(n[self.active], np.asarray(yhat, float)[self.active], self.c).max())
+        s = float(ratio_score(n[self.active], self._yh(yhat)[self.active], self.c).max())
         self.scores.append(s)
         err = bool((deployed[self.active] < n[self.active]).any())
         self.beta = min(1.0, self.beta + self.gamma * (alpha_target - float(err)))
@@ -150,7 +157,7 @@ def decide(yhat, aci, sched, current, r_min=1, r_max=10):
     up = aci.upper(yhat)
     act = aci.active
     target = np.where(act, np.where(np.isinf(up), r_max, np.floor(np.nan_to_num(up, posinf=r_max))),
-                      np.ceil(np.asarray(yhat, float)))
+                      np.ceil(AppACI._yh(yhat)))
     return sched.apply(np.clip(target, r_min, r_max), current)
 
 
