@@ -101,7 +101,8 @@ echo "START $(date '+%Y-%m-%d %H:%M:%S')" | tee "$RD/${RUN}_time.txt"
 # CÁCH CŨ (trước 10/11/2026), không ghi độ trễ từng request:
 #   RUN_TIME=$RUN_TIME locust -f pipeline/locustfile.py --headless --host http://localhost:31000 \
 #       --csv "$RD/${RUN}_locust" > "$RD/${RUN}_locust.log" 2>&1 || true
-LAT_LOG="$RD/${RUN}_latency.csv" RUN_TIME=$RUN_TIME locust -f pipeline/locustfile.py --headless \
+echo "KEEPALIVE=${KEEPALIVE:-1}" | tee -a "$RD/${RUN}_time.txt"     # 0 = new TCP connection per request (11/11)
+KEEPALIVE=${KEEPALIVE:-1} LAT_LOG="$RD/${RUN}_latency.csv" RUN_TIME=$RUN_TIME locust -f pipeline/locustfile.py --headless \
     --host http://localhost:31000 --csv "$RD/${RUN}_locust" > "$RD/${RUN}_locust.log" 2>&1 || true
 echo "END   $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$RD/${RUN}_time.txt"
 cleanup

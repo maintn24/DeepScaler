@@ -74,9 +74,22 @@ WeightedBoutiqueTasks = type("WeightedBoutiqueTasks", (BoutiqueTasks,),
                              {"tasks": {getattr(BoutiqueTasks, k): w for k, w in _W.items() if w > 0}})
 
 
+# KEEPALIVE=0 (thesis, 11/11/2026): close the TCP connection after every request. The entry service is a
+# NodePort (frontend-external in the authors' boutique.yaml), so kube-proxy balances per CONNECTION. With
+# keep-alive each Locust user stays pinned to the frontend pod it first reached: users created while there
+# was 1 pod keep loading that pod after scale-out (seen 10/11: one frontend pod 43.7 % CPU-throttled, the
+# others 1-14 %), so added replicas barely help and SLA violations appear at any replica count.
+# Default KEEPALIVE=1 = ORIGINAL behaviour (requests.Session keep-alive), used by every run before 11/11.
+KEEPALIVE = os.environ.get("KEEPALIVE", "1") != "0"
+
+
 class BoutiqueUser(HttpUser):
     wait_time = constant(1)
     tasks = [WeightedBoutiqueTasks]
+
+    def on_start(self):
+        if not KEEPALIVE:
+            self.client.headers.update({"Connection": "close"})
 
 
 class FifaTraceShape(LoadTestShape):

@@ -102,6 +102,8 @@ def main():
     p.add_argument("--viol_win", type=int, default=None,
                    help="seconds of the Istio window for the per-step violation v_t (default 2 x step, "
                         "as before; = step matches the design's 'p95 within step t' but needs >= 2 scrapes)")
+    p.add_argument("--inactive_rule", default="deepscaler", choices=["deepscaler", "ceil"],
+                   help="services outside V_act: DeepScaler rounding floor(yhat+0.65) (default) or ceil(yhat) (original)")
     p.add_argument("--down_steps", type=int, default=3)
     p.add_argument("--max_down", type=int, default=1)
     p.add_argument("--dry_run", action="store_true")
@@ -176,7 +178,7 @@ def main():
             alpha, pinfo = pacer.alpha()
             # 3. forecast + 4. decision
             yhat = predict_window(model, adj, X[-step_in:], mean, std)
-            pods = decide(yhat, aci, sched, running, a.min_replicas, a.max_replicas)
+            pods = decide(yhat, aci, sched, running, a.min_replicas, a.max_replicas, a.inactive_rule)
             for s, n_new, n_old in zip(services, pods, running.astype(int)):
                 if n_new != n_old and not a.dry_run:
                     subprocess.run(["kubectl", "scale", "deployment", s, "-n", a.namespace,

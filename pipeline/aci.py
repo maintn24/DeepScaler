@@ -152,12 +152,18 @@ class Scheduler:
         return new
 
 
-def decide(yhat, aci, sched, current, r_min=1, r_max=10):
-    """Replicas for one decision. Active: floor of the calibrated upper bound; others: ceil(yhat)."""
+def decide(yhat, aci, sched, current, r_min=1, r_max=10, inactive_rule="deepscaler"):
+    """Replicas for one decision. Active: floor of the calibrated upper bound.
+    Services outside V_act (no calibration data, demand ~always 1):
+      inactive_rule="deepscaler" (default since 11/11/2026): DeepScaler's own rounding floor(yhat + 0.65)
+        (authors' predict_scale.py; pipeline/autoscaler.scale_to_pods). A forecast of 1.02 -> 1 replica.
+      inactive_rule="ceil" (ORIGINAL design text, tex Sec. 2.5): ceil(yhat). A forecast slightly above 1
+        gives 2 replicas for every idle service (seen online 10/11: 7 idle services at 2 pods)."""
     up = aci.upper(yhat)
     act = aci.active
-    target = np.where(act, np.where(np.isinf(up), r_max, np.floor(np.nan_to_num(up, posinf=r_max))),
-                      np.ceil(AppACI._yh(yhat)))
+    yh = AppACI._yh(yhat)
+    other = np.ceil(yh) if inactive_rule == "ceil" else np.floor(yh + 0.65)
+    target = np.where(act, np.where(np.isinf(up), r_max, np.floor(np.nan_to_num(up, posinf=r_max))), other)
     return sched.apply(np.clip(target, r_min, r_max), current)
 
 
