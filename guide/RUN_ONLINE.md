@@ -106,6 +106,25 @@ cat reports/mu.json      # xem r2 (nên > 0.7) và "extrapolated" (true = μ n�
 
 Nếu một service có `extrapolated: true`, nghĩa là tải chưa đẩy pod của nó tới 50 % CPU. Khi đó tăng `--hi` của `make_traces ramp` hoặc giảm số pod của service đó, rồi đo lại.
 
+## 3c. Đo độ trễ và μ theo SLA (bản sửa 10/11/2026)
+
+**Độ trễ.** Từ bản này mỗi lần chạy ghi độ trễ ở hai nơi:
+- **Locust, từng request** (`Logs/RUN_latency.csv`, bật bằng `LAT_LOG`). Đây là số đo end-to-end chính xác, dùng cho Table II. `pipeline.client_latency` gộp vào CSV thành các cột `client_p95`, `client_slow<ms>`, `client_n`, `client_cpu`.
+- **Sidecar Istio** (Prometheus). `deploy/02_boutique.sh` đặt biên bucket tại 100/150/200/250/300 ms (`LAT_BUCKETS`). Nhờ đó `p95 > SLO` không còn bị nội suy trong bucket (100, 250] mặc định. Kiểm tra bằng `deploy/check_latency_buckets.sh 0.2` sau khi đã có traffic.
+
+`05_online_run.sh` và `03_load_and_collect.sh` đã tự làm cả hai việc. Với các lần chạy cũ, chỉ lấy được giá trị xấp xỉ từ Locust history:
+```bash
+python -m pipeline.client_latency --csv data/raw/RUN.csv --history Logs/RUN_locust_stats_history.csv
+python -m pipeline.compare_runs --lat_source client ...   # cột lat_source: client | client~ | istio | istio~
+```
+Dấu `~` nghĩa là số xấp xỉ. Không trộn nhiều nguồn trong cùng một bảng.
+
+**μ theo SLA.** μ ở bước 3b là tải tại đó CPU của pod đạt 50 % (điểm làm việc của HPA), thận trọng khoảng 2-3 lần so với SLA. Đo lại theo SLA, mỗi lần một service, mất khoảng 1,5-2 giờ:
+```bash
+deploy/07_profile_sla.sh            # -> reports/mu_sla.json, rồi dùng MU=reports/mu_sla.json / --mu reports/mu_sla.json
+```
+Service nào có `censored: true` thì μ của nó chỉ là cận dưới, do tải chưa đủ lớn: tăng `HI` hoặc giảm `OTHER` rồi chạy lại cho service đó (`TARGETS="..."`).
+
 ## 4. Chạy DeepScaler
 
 Đưa tất cả service về 1 pod để lần chạy nào cũng bắt đầu từ cùng trạng thái:

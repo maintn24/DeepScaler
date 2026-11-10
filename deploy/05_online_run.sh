@@ -14,6 +14,8 @@
 #                  the same clean state (removes the order / cluster-age effect measured on 04-08/11)
 #   RUN_TIME=4500  Locust seconds (one FIFA loop = 75 min)
 #   SLO=0.2        end-to-end SLA on frontend p95 (s), for slo / mmn / ds trust threshold
+#                  Latency is logged twice: Istio sidecar (Prometheus, needs a bucket boundary at SLO,
+#                  deploy/02_boutique.sh) and per request by Locust (Logs/RUN_latency.csv, exact).
 #   MODEL_DIR=model_states/ds_burst_tuned
 #   REF_CSV=<latest data/raw/online_hpa_*.csv>   reference run for the SLO decomposition (slo, mmn)
 #   MU=reports/mu.json                            profiled pod capacity (mmn)
@@ -49,6 +51,9 @@ kubectl -n "$NS" scale deploy --all --replicas=1
 kubectl -n "$NS" rollout status deploy --timeout=600s
 curl -sf 'http://localhost:30090/api/v1/query?query=up' >/dev/null || { echo "Prometheus not reachable" >&2; exit 1; }
 sleep 120
+# mới (10/11/2026): kiểm tra biên bucket tại SLO; cách cũ không có 2 dòng dưới
+for i in $(seq 1 20); do curl -s -o /dev/null http://localhost:31000/ || true; done; sleep 30   # create the series
+deploy/check_latency_buckets.sh "$SLO" || echo "WARNING: continuing; Istio p95 at the SLO will be approximate (client log is still exact)"
 
 RUN=online_${AS}_$(date +%Y%m%d_%H%M)
 echo "$RUN" > Logs/CURRENT_RUN
@@ -74,12 +79,16 @@ if [ -n "$AS_PID" ]; then
 fi
 
 echo "START $(date '+%Y-%m-%d %H:%M:%S')" | tee "Logs/${RUN}_time.txt"
-RUN_TIME=$RUN_TIME locust -f pipeline/locustfile.py --headless --host http://localhost:31000 \
-    --csv "Logs/${RUN}_locust" > "Logs/${RUN}_locust.log" 2>&1 || true
+# CÁCH CŨ (trước 10/11/2026), không ghi độ trễ từng request:
+#   RUN_TIME=$RUN_TIME locust -f pipeline/locustfile.py --headless --host http://localhost:31000 \
+#       --csv "Logs/${RUN}_locust" > "Logs/${RUN}_locust.log" 2>&1 || true
+LAT_LOG="Logs/${RUN}_latency.csv" RUN_TIME=$RUN_TIME locust -f pipeline/locustfile.py --headless \
+    --host http://localhost:31000 --csv "Logs/${RUN}_locust" > "Logs/${RUN}_locust.log" 2>&1 || true
 echo "END   $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "Logs/${RUN}_time.txt"
 cleanup
 
 START=$(sed -n 's/^START *//p' "Logs/${RUN}_time.txt"); END=$(sed -n 's/^END *//p' "Logs/${RUN}_time.txt")
 python -m pipeline.collect --start "$START" --end "$END" --step 30 \
     --out "data/raw/${RUN}.csv" --adj_out "data/raw/${RUN}_od.npy"
+python -m pipeline.client_latency --csv "data/raw/${RUN}.csv" --lat_log "Logs/${RUN}_latency.csv"   # mới; cách cũ: không có bước này
 echo ">> done: data/raw/${RUN}.csv  ($(($(wc -l < "data/raw/${RUN}.csv") - 1)) rows, expect ~151)"

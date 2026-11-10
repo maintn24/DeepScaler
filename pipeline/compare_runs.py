@@ -30,8 +30,36 @@ from pipeline.common import CFG, ENTRY, SERVICES
 from pipeline.uncertainty_report import cpu_resources
 
 
-def run_metrics(df, cores, slo, step):
+def latency(df, source, slo):
+    """End-to-end latency series used for eq. (1) of the paper (SLA on end-to-end response time).
+    client: exact p95 seen by the load generator (pipeline/client_latency.py);
+    istio : p95 at the entry service's sidecar. It is exact for `p95 > SLO` only if the Istio histogram
+            has a bucket boundary at the SLO (column <entry>_slow<ms> present, deploy/02_boutique.sh);
+            otherwise it is interpolated inside the bucket around the SLO (default buckets 100, 250 ms).
+    auto  : client if available, else istio.
+
+    OLD METHOD (before 10/11/2026), kept for comparison / rollback. Same numbers as `--lat_source istio`
+    on the old CSVs. To restore the old code exactly, use instead of latency()+run_metrics(..., lat):
+        def run_metrics(df, cores, slo, step):
+            lat = df[f"{ENTRY}_p95"] if f"{ENTRY}_p95" in df else df[f"{ENTRY}_res"]
+            ...                                   # rest of run_metrics unchanged
+    and in main():
+        m, v, c, e = run_metrics(df, cores, a.slo, step)
+        rows.append({"label": label, "run": os.path.basename(path), **m})
+        ...
+        lat = df[f"{ENTRY}_p95"] if f"{ENTRY}_p95" in df else df[f"{ENTRY}_res"]   # for the SLO sweep
+        print(f"Table II style (SLO {a.slo}s on {ENTRY} p95, warm-up {a.warmup_min} min skipped)\n", table.to_string())
+    """
+    if source in ("client", "auto") and "client_p95" in df and df["client_p95"].notna().mean() > 0.9:
+        return df["client_p95"].ffill(), "client" + ("~" if df.get("client_src", pd.Series(["log"])).iloc[0] == "history" else "")
+    if source == "client":
+        raise SystemExit("client latency missing: run pipeline.client_latency on this CSV first")
     lat = df[f"{ENTRY}_p95"] if f"{ENTRY}_p95" in df else df[f"{ENTRY}_res"]
+    exact = f"{ENTRY}_slow{int(round(1000 * slo))}" in df and df[f"{ENTRY}_slow{int(round(1000 * slo))}"].notna().any()
+    return lat, "istio" + ("" if exact else "~")
+
+
+def run_metrics(df, cores, slo, step, lat):
     pods = df[[f"{s}_pod" for s in SERVICES]].to_numpy()
     cost_t = (pods * cores).sum(1) * step / 3600                       # core-hours per step
     viol_t = (lat > slo).to_numpy()
@@ -51,6 +79,8 @@ def main():
     p.add_argument("--warmup_min", type=float, default=10)
     p.add_argument("--manifest", default=CFG["manifest"])
     p.add_argument("--out", default="reports/table2")
+    p.add_argument("--lat_source", default="auto", choices=["auto", "client", "istio"],
+                   help="end-to-end latency for eq. (1): client (Locust, exact), istio (sidecar p95), auto")
     a = p.parse_args()
     os.makedirs(a.out, exist_ok=True)
     res = cpu_resources(a.manifest)
@@ -61,10 +91,10 @@ def main():
         df = pd.read_csv(path)
         step = float(np.median(np.diff(df["unix_time"])))
         df = df.iloc[int(a.warmup_min * 60 / step):].reset_index(drop=True)
-        m, v, c, e = run_metrics(df, cores, a.slo, step)
-        rows.append({"label": label, "run": os.path.basename(path), **m})
+        lat, src = latency(df, a.lat_source, a.slo)
+        m, v, c, e = run_metrics(df, cores, a.slo, step, lat)
+        rows.append({"label": label, "run": os.path.basename(path), "lat_source": src, **m})
         curves[label].append((np.arange(len(v)) * step / 60, np.cumsum(v) * step / 60, np.cumsum(c), np.cumsum(e)))
-        lat = df[f"{ENTRY}_p95"] if f"{ENTRY}_p95" in df else df[f"{ENTRY}_res"]
         sweep.append({"label": label, **{f"SLO {int(1000 * float(t))} ms": 100 * (lat > float(t)).mean()
                                          for t in a.slo_sweep.split(",")}})
     per_run = pd.DataFrame(rows)
@@ -78,7 +108,12 @@ def main():
     sw = pd.DataFrame(sweep).groupby("label").mean().round(1)
     sw.to_csv(f"{a.out}/slo_sweep.csv")
     pd.set_option("display.width", 200)
-    print(f"Table II style (SLO {a.slo}s on {ENTRY} p95, warm-up {a.warmup_min} min skipped)\n", table.to_string())
+    srcs = sorted(set(per_run["lat_source"]))
+    print(f"Table II style (SLO {a.slo}s, end-to-end p95 from {srcs}, warm-up {a.warmup_min} min skipped)\n",
+          table.to_string())
+    if any(x.endswith("~") for x in srcs):
+        print("WARNING: '~' = approximate latency (istio~: p95 interpolated inside a histogram bucket that "
+              "contains the SLO; client~: Locust stats_history). Do not mix sources inside one table.")
     print("\nViolation rate (%) vs SLO\n", sw.to_string())
     print("\nPer run\n", per_run.round(3).to_string(index=False))
     try:

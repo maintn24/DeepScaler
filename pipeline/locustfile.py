@@ -13,6 +13,11 @@ import random
 
 from locust import HttpUser, LoadTestShape, TaskSet, constant, task
 
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import latency_log  # noqa: E402,F401  (per-request latency log when LAT_LOG is set)
+# CÁCH CŨ (trước 10/11/2026): không có dòng import trên. Bỏ LAT_LOG thì hành vi y như cũ.
+
 TRACE = os.environ.get("TRACE", os.path.join(os.path.dirname(__file__), "..", "sendFlow", "random-100max.req"))
 TICK = float(os.environ.get("TICK", 5))          # seconds per trace value
 SCALE = float(os.environ.get("SCALE", 1.0))      # multiply user counts (cluster size)

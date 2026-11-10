@@ -23,6 +23,8 @@ sys.modules.setdefault("atomic_queries", types.SimpleNamespace(_query_advanced_t
 
 from load_generator_train import TrainTicketUserTasks  # noqa: E402  (authors' flows)
 from load_shape import FifaTraceShape  # noqa: E402,F401  (picked up by Locust)
+import latency_log  # noqa: E402,F401  (per-request latency log when LAT_LOG is set)
+# CÁCH CŨ (trước 10/11/2026): không có dòng import trên. Bỏ LAT_LOG thì hành vi y như cũ.
 
 
 class TrainTicketUser(HttpUser):

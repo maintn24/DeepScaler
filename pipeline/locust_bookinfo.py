@@ -13,6 +13,8 @@ from locust import HttpUser, constant, task
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from load_shape import FifaTraceShape  # noqa: E402,F401  (picked up by Locust)
+import latency_log  # noqa: E402,F401  (per-request latency log when LAT_LOG is set)
+# CÁCH CŨ (trước 10/11/2026): không có dòng import trên. Bỏ LAT_LOG thì hành vi y như cũ.
 
 
 class BookInfoUser(HttpUser):

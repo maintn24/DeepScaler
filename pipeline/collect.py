@@ -17,6 +17,11 @@ Extra columns for evaluation (not model inputs; build_dataset only reads --featu
   err    : rate of 5xx responses (req/s) returned by the service
   cpupod : CPU cores used by all containers of the service's pods, incl. the istio-proxy
            sidecar (what HPA compares against the pod CPU request)
+  slow<ms> (entry service only, --slow_ms): share of requests slower than <ms>, read directly at the
+           histogram boundary le=<ms> (no interpolation). Needs a bucket boundary at <ms>
+           (deploy/02_boutique.sh sets LAT_BUCKETS via sidecar.istio.io/statsHistogramBuckets).
+           With such a boundary, `p95 > SLO` <=> `slow<SLO> > 0.05` exactly; with Istio's default
+           buckets (..., 100, 250, ...) the p95 at a 200 ms SLO is interpolated and the column is NaN.
 It also writes the call graph observed by Istio (source -> destination
 workload) as an adjacency matrix (`--adj_out`), used as the "od" graph.
 
@@ -61,6 +66,11 @@ EXTRA_TEMPLATES = {
     "cpupod": ("sum(irate(container_cpu_usage_seconds_total{{namespace='{ns}',"
                "pod=~'{svc}-[a-z0-9]+-[a-z0-9]+',container!='',container!='POD'}}[1m]))"),
 }
+# share of requests slower than {ms} ms; le may be printed as "200" or "200.0" by Envoy
+SLOW_TEMPLATE = ("1 - sum(rate(istio_request_duration_milliseconds_bucket{{reporter='destination',"
+                 "destination_workload_namespace='{ns}',destination_workload='{svc}',le=~'{ms}|{ms}.0'}}[{win}]))"
+                 "/sum(rate(istio_request_duration_milliseconds_count{{reporter='destination',"
+                 "destination_workload_namespace='{ns}',destination_workload='{svc}'}}[{win}]))")
 EDGE_QUERY = ("sum by (source_workload, destination_workload) (increase(istio_requests_total{{"
               "reporter='source',source_workload_namespace='{ns}',destination_workload_namespace='{ns}'}}[{dur}s]))")
 
@@ -83,8 +93,9 @@ def query_range(prom, q, start, end, step):
     return out
 
 
-def collect(prom, ns, start, end, step, services=SERVICES, metrics=None, verbose=True):
-    """metrics: list of metric names to query (default: model inputs + evaluation extras)."""
+def collect(prom, ns, start, end, step, services=SERVICES, metrics=None, verbose=True, slow_ms=()):
+    """metrics: list of metric names to query (default: model inputs + evaluation extras).
+    slow_ms: thresholds (ms) for the <ENTRY>_slow<ms> columns (only if ENTRY is in services)."""
     templates = {**TEMPLATES, **EXTRA_TEMPLATES}
     names = list(templates) if metrics is None else list(metrics)
     # integer count: with unix times (~1.7e9 s) `end + 1e-9 == end`, so np.arange(start, end + 1e-9)
@@ -99,12 +110,37 @@ def collect(prom, ns, start, end, step, services=SERVICES, metrics=None, verbose
             cols[f"{svc}_{m}"] = [vals.get(float(t), np.nan) for t in grid]
         if verbose:
             print("collected", svc)
+    slow_cols = []
+    if ENTRY in services:
+        for ms in slow_ms:
+            ms = int(ms)
+            vals = query_range(prom, SLOW_TEMPLATE.format(ns=ns, svc=ENTRY, ms=ms, win=win), start, end, step)
+            col = f"{ENTRY}_slow{ms}"
+            cols[col] = [vals.get(float(t), np.nan) for t in grid]
+            slow_cols.append(col)
+            if verbose and not vals:
+                print(f"WARNING: no histogram boundary le={ms} for {ENTRY}: {col} left empty. Set it with "
+                      f"LAT_BUCKETS in deploy/02_boutique.sh (sidecar.istio.io/statsHistogramBuckets).")
     df = pd.DataFrame(cols)
     # no traffic -> NaN latency/rate/errors; treat as 0, pods/cpu are forward-filled
     zero_fill = [m for m in ("res", "req", "p95", "err") if m in names]
     for svc in services:
         df[[f"{svc}_{m}" for m in zero_fill]] = df[[f"{svc}_{m}" for m in zero_fill]].fillna(0.0)
-    return df.ffill().fillna(0.0)
+    # OLD (before 10/11/2026): no slow<ms> columns, everything forward-filled then zero-filled:
+    #     return df.ffill().fillna(0.0)
+    # (also restore with slow_ms=() / --slow_ms "", which leaves only the old columns)
+    # slow<ms>: 0 only when there was no traffic; a missing bucket boundary stays NaN (never 0)
+    keep = df[slow_cols].copy() if slow_cols else None
+    if keep is not None:
+        no_traffic = (df[f"{ENTRY}_req"] <= 0) if f"{ENTRY}_req" in df else pd.Series(False, index=df.index)
+        for c in slow_cols:
+            if keep[c].notna().any():
+                keep.loc[no_traffic & keep[c].isna(), c] = 0.0
+    other = [c for c in df.columns if c not in slow_cols]
+    df[other] = df[other].ffill().fillna(0.0)
+    if keep is not None:
+        df[slow_cols] = keep
+    return df
 
 
 def call_graph(prom, ns, end, duration, services=SERVICES, weighted=False):
@@ -137,16 +173,21 @@ def main():
     p.add_argument("--step", type=int, default=30, help="sampling interval in seconds")
     p.add_argument("--out", default="data/raw/boutique.csv")
     p.add_argument("--adj_out", default=None)
+    p.add_argument("--slow_ms", default="100,150,200,250,300",
+                   help="thresholds (ms) for <entry>_slow<ms>; each needs a histogram boundary (LAT_BUCKETS)")
     a = p.parse_args()
+    slow_ms = [int(x) for x in a.slow_ms.split(",") if x.strip()]
     if a.last:
         end = time.time()
         start = end - a.last * 60
     else:
         start, end = parse_time(a.start), parse_time(a.end)
     start, end = start - start % a.step, end - end % a.step
-    df = collect(a.prom, a.namespace, start, end, a.step)
+    df = collect(a.prom, a.namespace, start, end, a.step, slow_ms=slow_ms)
+    # OLD: df = collect(a.prom, a.namespace, start, end, a.step)      (same as --slow_ms "")
     if ENTRY not in SERVICES:                    # e.g. Train-Ticket: latency at the front end only
-        e = collect(a.prom, a.namespace, start, end, a.step, services=[ENTRY], metrics=["res", "req", "p95", "err"])
+        e = collect(a.prom, a.namespace, start, end, a.step, services=[ENTRY], metrics=["res", "req", "p95", "err"],
+                    slow_ms=slow_ms)
         df = df.join(e.drop(columns=["time", "unix_time"]))
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     df.to_csv(a.out, index=False)

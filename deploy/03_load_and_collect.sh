@@ -10,12 +10,14 @@ mkdir -p data/raw Logs
 python -c "import locust" 2>/dev/null || pip install -q locust requests pandas numpy
 START=$(date '+%Y-%m-%d %H:%M:%S')
 echo "[$START] bắt đầu bơm tải $HOURS giờ -> $HOST"
-RUN_TIME=$(python3 -c "print(int(float('$HOURS')*3600))") \
+# CÁCH CŨ (trước 10/11/2026): như dưới nhưng không có LAT_LOG=... và không chạy pipeline.client_latency
+LAT_LOG="Logs/${RUN}_latency.csv" RUN_TIME=$(python3 -c "print(int(float('$HOURS')*3600))") \
 locust -f pipeline/locustfile.py --headless --host "$HOST" \
        --csv "Logs/${RUN}_locust" > "Logs/${RUN}_locust.log" 2>&1 || true
 END=$(date '+%Y-%m-%d %H:%M:%S')
 python -m pipeline.collect --prom "$PROM" --namespace "$NS" --start "$START" --end "$END" \
        --step "$STEP" --out "data/raw/${RUN}.csv" --adj_out "data/raw/${RUN}_od.npy"
+python -m pipeline.client_latency --csv "data/raw/${RUN}.csv" --lat_log "Logs/${RUN}_latency.csv"
 python -m pipeline.build_dataset --raw "data/raw/${RUN}.csv" --od_adj "data/raw/${RUN}_od.npy" \
        --out_dir data/boutique_cluster
 echo "Xong. Upload data/raw/${RUN}.csv (+ _od.npy) lên Colab/Kaggle, chọn DATA_SOURCE='cluster'."
