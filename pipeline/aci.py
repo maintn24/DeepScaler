@@ -130,6 +130,69 @@ class SLAPacer:
         return a, info
 
 
+class CapacityCorrector:
+    """Online correction of the per-replica capacity, mu_eff = phi * mu (extension added 13/11/2026;
+    the ORIGINAL design = mode "off", phi = 1; full copy of the previous file: pipeline/aci_v1_20261112.py).
+
+    Why. The demand label n = max(1, ceil(lambda / mu)) is only as good as mu. mu is profiled one service
+    at a time with the others over-provisioned (thesis Sec. 3.2), so it is optimistic when all services
+    run near capacity together. Violations then happen at steps where no service is short of its (too
+    low) demand -- the p0 term of Eq. (3.3). ACI sees no miss there and the pacer can only lower alpha,
+    which adds nothing, so neither loop can add replicas (online run 10/11: p0 = 0.33).
+
+    Update, only at steps where no active service is short (shortage is the calibrator's job):
+        phi <- clip(phi - eta * (v - target), phi_min, phi_max)
+    i.e. the stochastic-approximation form of the ACI update (Gibbs & Candes 2021, eq. (2)) applied to
+    the violation indicator: in the long run the violation rate at steps without shortage (p0) is driven
+    to `target` as long as phi stays inside [phi_min, phi_max]. Updating the capacity profile from
+    observed violations follows BACCv2's profile update (unpublished manuscript, Sec. III-C3a).
+    phi_min caps the extra cost (phi = 0.5 doubles the demand of a loaded service). If p0 stays above
+    `target` even at phi_min, the violations do not depend on the load per replica (e.g. node-level
+    interference): phi then sits at phi_min, which flags the budget as infeasible (Eq. (3.1)).
+
+    mode: "off" -> phi = 1 always (ORIGINAL); "fixed" -> phi = phi0 always; "online" -> update above.
+    """
+
+    def __init__(self, mode="off", phi0=1.0, eta=0.02, target=0.025, phi_min=0.5, phi_max=1.0,
+                 warmup_steps=10):
+        if mode not in ("off", "fixed", "online"):
+            raise ValueError(mode)
+        self.mode, self.eta, self.target = mode, eta, target
+        self.phi_min, self.phi_max, self.warmup = phi_min, phi_max, warmup_steps
+        self.phi = 1.0 if mode == "off" else float(np.clip(phi0, phi_min, phi_max))
+        self.t = 0
+        self.z, self.Z = 0, 0                  # violations / steps without shortage (= p0 estimate)
+
+    def record(self, violated, missed):
+        """One monitoring step: SLA violated? some active service short of demand?"""
+        self.t += 1
+        if missed:
+            return
+        self.Z += 1
+        self.z += int(bool(violated))
+        if self.mode == "online" and self.t > self.warmup:
+            self.phi = float(np.clip(self.phi - self.eta * (float(bool(violated)) - self.target),
+                                     self.phi_min, self.phi_max))
+
+    def p0(self):
+        return (self.z + 0.5) / (self.Z + 1)   # Jeffreys posterior mean, as for p0 in SLAPacer
+
+    def at_floor(self):
+        return self.mode == "online" and self.phi <= self.phi_min + 1e-9
+
+
+def scale_for_capacity(yhat, active, phi):
+    """Forecast under mu_eff = phi * mu. The forecaster predicts n = ceil(lambda / mu); for a loaded
+    service n ~ lambda / mu, so its demand under mu_eff is ~ n / phi. Applied to V_act only: a service
+    whose demand is one replica because its load is tiny keeps one replica whatever phi.
+    phi = 1 returns the forecast unchanged (ORIGINAL behaviour)."""
+    y = np.asarray(yhat, float).copy()
+    if phi != 1.0:
+        act = np.asarray(active, bool)
+        y[act] = y[act] / phi
+    return y
+
+
 class Scheduler:
     def __init__(self, n, r_min=1, r_max=10, down_steps=3, max_down=1):
         self.r_min, self.r_max, self.down_steps, self.max_down = r_min, r_max, down_steps, max_down

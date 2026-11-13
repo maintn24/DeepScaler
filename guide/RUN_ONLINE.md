@@ -348,3 +348,26 @@ Dữ liệu Prometheus nằm **trong cluster**. Phải chạy `collect.py` (bư�
   - Giới hạn 1–10 pod.
 - **Chưa cài:** cơ chế *trust threshold* (Sec. IV-D) và việc học lại định kỳ (Algorithm 1, bước 5).
 - **Chi phí suy luận:** autoscaler, Locust và Prometheus chạy chung máy với cluster, nên có thêm một ít overhead. Báo đo khoảng 0,1 core cho mỗi lần dự đoán (Table III).
+
+## 3e. Hiệu chỉnh năng lực μ online (φ), thêm ngày 13/11/2026
+
+`--phi off` (mặc định) giữ nguyên hành vi của lần chạy ACI ngày 10/11. Bản code trước khi thêm φ được lưu ở
+`pipeline/aci_v1_20261112.py` và `pipeline/aci_autoscaler_v1_20261112.py`.
+
+- `CapacityCorrector` (pipeline/aci.py): μ_eff = φ·μ. Ở các bước không có service thiếu replica,
+  φ ← clip(φ − η(v − target), φ_min, 1), với target mặc định ε/2 và φ_min = 0,5. Vi phạm SLA lúc đủ
+  replica (phần p₀) làm φ giảm, tức là thêm replica. φ dừng ở φ_min nghĩa là vi phạm không phụ thuộc tải
+  trên mỗi replica, và ngân sách không khả thi (Eq. 3.1).
+- Kiểm tra không cần cluster: `python -m pipeline.test_aci` (mục 6).
+- Ước lượng offline: `python "Claude outputs/chapter4/phi_estimate.py"`.
+
+Chạy liền trong cùng một buổi, không dựng lại cluster giữa các lần (như ngày 10/11), để mức stall giống nhau:
+
+```bash
+export CAMPAIGN=v2_exact FRESH=0 ACI_MODEL_DIR=model_states/ds_demand MU=reports/mu_sla.json \
+       CALIB_CSV=data/raw/train_burst_20261104_0751.csv EPS=0.05 PACER=on INACTIVE=ceil
+PHI=off    deploy/05_online_run.sh aci     # 1. lặp lại cấu hình 10/11 (ACI n = 2, đo mức stall hôm nay)
+PHI=online deploy/05_online_run.sh aci     # 2. có hiệu chỉnh μ online
+deploy/05_online_run.sh hpa                # 3. (nên có) đối chứng HPA trong cùng buổi
+python -m pipeline.index_runs              # cập nhật runs/INDEX.md, ghi chú vào runs/notes.csv
+```
