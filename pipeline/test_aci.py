@@ -6,13 +6,10 @@ relies on, without a cluster:  python -m pipeline.test_aci
   3. long-run one-sided bound of ACI (L = 0):  mean(err) <= alpha + (beta_1 + gamma) / (gamma K)
   4. pacer: alpha goes down while the SLA budget is overspent, up when it is not; eta|e| <= gamma/2
   5. scheduler: scale out at once, scale in only after down_steps lower proposals, -max_down per decision
-  6. capacity correction (13/11): off = no-op; online drives p0 to its target when p0 depends on phi,
-     sits at phi_min when it does not (infeasible budget); scale_for_capacity leaves V_act^c untouched
 """
 import numpy as np
 
-from pipeline.aci import AppACI, CapacityCorrector, Scheduler, SLAPacer, decide, ratio_score, scale_for_capacity
-# ORIGINAL: from pipeline.aci import AppACI, Scheduler, SLAPacer, decide, ratio_score
+from pipeline.aci import AppACI, Scheduler, SLAPacer, decide, ratio_score
 
 
 def check(name, ok):
@@ -68,34 +65,6 @@ def main():
     s = Scheduler(1, 1, 10, down_steps=3, max_down=1)
     seq = [s.apply([t], [2])[0] for t in [5, 1, 1, 1, 1, 1, 1, 8]]
     ok &= check(f"5 scheduler {seq} == [5, 5, 5, 4, 4, 4, 3, 8]", seq == [5, 5, 5, 4, 4, 4, 3, 8])
-    # 6 capacity correction
-    off = CapacityCorrector("off")
-    for _ in range(50):
-        off.record(True, False)
-    ok &= check("6 phi off stays 1 (original behaviour)", off.phi == 1.0)
-    y = np.array([1.0, 2.0, 3.0]); act = np.array([False, True, True])
-    ok &= check("6 scale_for_capacity: phi=1 identity, inactive untouched",
-                np.allclose(scale_for_capacity(y, act, 1.0), y) and scale_for_capacity(y, act, 0.5)[0] == 1.0
-                and np.allclose(scale_for_capacity(y, act, 0.5)[1:], [4.0, 6.0]))
-    rng = np.random.default_rng(0)
-    c = CapacityCorrector("online", target=0.025, phi_min=0.5)
-    v_ok = []
-    for t in range(20000):                       # p0 grows with the load per replica, i.e. with phi
-        p0_true = 0.01 + 0.2 * (c.phi - 0.5) / 0.5
-        v = rng.random() < p0_true
-        c.record(v, False)
-        if t > 5000:
-            v_ok.append(v)
-    ok &= check(f"6 online: long-run p0 {np.mean(v_ok):.4f} ~ target 0.025, phi {c.phi:.3f} > phi_min",
-                abs(np.mean(v_ok) - 0.025) < 0.005 and c.phi > 0.5)
-    c2 = CapacityCorrector("online", target=0.025, phi_min=0.5)
-    for _ in range(2000):                        # interference: p0 = 0.25 whatever phi
-        c2.record(rng.random() < 0.25, False)
-    ok &= check(f"6 online: load-independent p0 -> phi at floor ({c2.phi}), flagged", c2.at_floor())
-    c3 = CapacityCorrector("online", target=0.025)
-    for _ in range(200):
-        c3.record(True, True)                    # shortage steps are the calibrator's job
-    ok &= check("6 online: steps with shortage do not move phi", c3.phi == 1.0)
     print("ALL PASS" if ok else "SOME CHECKS FAILED")
     raise SystemExit(0 if ok else 1)
 

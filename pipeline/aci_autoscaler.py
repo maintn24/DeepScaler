@@ -14,10 +14,6 @@ Every period (= data interval, h = 1 step):
      demand,...) recommended; a 'pod' model also works (ACI calibrates any forecaster against demand);
   4. replicas: active services floor((yhat + c) Q - c), others ceil(yhat); scheduler; kubectl scale;
   5. any failure (Prometheus, model) -> keep the current replicas (logged as "hold").
-  Extension (13/11/2026, --phi; default off = ORIGINAL behaviour, previous file kept as
-  pipeline/aci_autoscaler_v1_20261112.py): online capacity correction mu_eff = phi * mu
-  (pipeline/aci.CapacityCorrector). phi goes down when the SLA is violated while no active service is
-  short of its demand (the p0 term), so the system adds replicas where ACI and the pacer cannot.
 
   python -m pipeline.aci_autoscaler --model_dir model_states/ds_demand --mu reports/mu_sla.json \
       --calib_csv data/raw/train_burst_20261104_0751.csv --eps 0.05 --slo 0.2 --period_min 75
@@ -32,9 +28,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from pipeline.aci import (AppACI, CapacityCorrector, Scheduler, SLAPacer, active_set, decide, demand,
-                          ratio_score, scale_for_capacity)
-# ORIGINAL: from pipeline.aci import AppACI, Scheduler, SLAPacer, active_set, decide, demand, ratio_score
+from pipeline.aci import AppACI, Scheduler, SLAPacer, active_set, decide, demand, ratio_score
 from pipeline.collect import SLOW_TEMPLATE, collect, query_range
 from pipeline.common import ENTRY, NAMESPACE
 
@@ -110,15 +104,6 @@ def main():
                         "as before; = step matches the design's 'p95 within step t' but needs >= 2 scrapes)")
     p.add_argument("--inactive_rule", default="deepscaler", choices=["deepscaler", "ceil"],
                    help="services outside V_act: DeepScaler rounding floor(yhat+0.65) (default) or ceil(yhat) (original)")
-    # online capacity correction (extension 13/11/2026); --phi off reproduces the ORIGINAL autoscaler exactly
-    p.add_argument("--phi", default="off", choices=["off", "fixed", "online"],
-                   help="capacity correction mu_eff = phi*mu: off (original), fixed (--phi0), online")
-    p.add_argument("--phi0", type=float, default=1.0, help="initial phi (online) or the fixed value (fixed)")
-    p.add_argument("--phi_eta", type=float, default=0.02, help="step size of the phi update")
-    p.add_argument("--phi_target", type=float, default=None,
-                   help="target violation rate at steps without shortage (p0); default eps/2, leaving the "
-                        "other half of the budget to violations caused by shortage (alpha * p1)")
-    p.add_argument("--phi_min", type=float, default=0.5, help="lower bound of phi (caps the extra cost)")
     p.add_argument("--down_steps", type=int, default=3)
     p.add_argument("--max_down", type=int, default=1)
     p.add_argument("--dry_run", action="store_true")
@@ -157,15 +142,11 @@ def main():
                      eta_relax=a.eta_relax, a_min=a.a_min, a_max=a.a_max,
                      enabled=(a.pacer == "on"), alpha_fixed=alpha0)
     # ORIGINAL: pacer = SLAPacer(a.eps, int(a.period_min * 60 / step), enabled=(a.pacer == "on"), alpha_fixed=alpha0)
-    corr = CapacityCorrector(a.phi, phi0=a.phi0, eta=a.phi_eta,
-                             target=a.eps / 2 if a.phi_target is None else a.phi_target, phi_min=a.phi_min)
     viol_win = a.viol_win or 2 * step
     sched = Scheduler(N, a.min_replicas, a.max_replicas, a.down_steps, a.max_down)
     slo_ms = int(round(a.slo * 1000))
     print(f"ACI autoscaler: step={step}s active={[s for s, f in zip(services, act) if f]} "
-          f"warm={len(warm)} pacer={a.pacer} eps={a.eps} phi={a.phi}(phi0={corr.phi}, target={corr.target}, "
-          f"min={a.phi_min}) inactive={a.inactive_rule} dry_run={a.dry_run}", flush=True)
-    # ORIGINAL print: ... f"warm={len(warm)} pacer={a.pacer} eps={a.eps} dry_run={a.dry_run}"
+          f"warm={len(warm)} pacer={a.pacer} eps={a.eps} dry_run={a.dry_run}", flush=True)
     os.makedirs(os.path.dirname(a.log) or ".", exist_ok=True)
 
     pending = None                           # (target step end, yhat, deployed placeholder)
@@ -179,11 +160,7 @@ def main():
             if len(df) < step_in:
                 raise RuntimeError(f"only {len(df)} steps from Prometheus")
             X = features_from(df.copy(), services, feats, mu)
-            # realised demand under the capacity used for the decision being evaluated (phi = 1: ORIGINAL)
-            phi_used = corr.phi if pending is None else pending.get("phi", 1.0)
-            n_now = np.stack([demand(df[f"{s}_req"].fillna(0).to_numpy()[-1:], mu[i] * phi_used)
-                              for i, s in enumerate(services)], 1)[0]
-            # ORIGINAL: n_now = ... demand(df[f"{s}_req"]..., mu[i]) ...
+            n_now = np.stack([demand(df[f"{s}_req"].fillna(0).to_numpy()[-1:], mu[i]) for i, s in enumerate(services)], 1)[0]
             running = df[[f"{s}_pod" for s in services]].to_numpy()[-1]
             lat = collect(a.prom, a.namespace, end - step, end, step, services=[ENTRY], metrics=["p95"],
                           verbose=False)[f"{ENTRY}_p95"].to_numpy()[-1]
@@ -197,24 +174,19 @@ def main():
                 missed, score = aci.observe(pending["yhat"], n_now, running, alpha_prev)
                 rec.update(score=score)
             pacer.record(violated, missed)
-            corr.record(violated, missed)            # no-op when --phi off / fixed
             # 2. outer loop
             alpha, pinfo = pacer.alpha()
             # 3. forecast + 4. decision
             yhat = predict_window(model, adj, X[-step_in:], mean, std)
-            yhat_c = scale_for_capacity(yhat, aci.active, corr.phi)     # = yhat when phi = 1
-            pods = decide(yhat_c, aci, sched, running, a.min_replicas, a.max_replicas, a.inactive_rule)
-            # ORIGINAL: pods = decide(yhat, aci, sched, running, a.min_replicas, a.max_replicas, a.inactive_rule)
+            pods = decide(yhat, aci, sched, running, a.min_replicas, a.max_replicas, a.inactive_rule)
             for s, n_new, n_old in zip(services, pods, running.astype(int)):
                 if n_new != n_old and not a.dry_run:
                     subprocess.run(["kubectl", "scale", "deployment", s, "-n", a.namespace,
                                     f"--replicas={int(n_new)}"], check=False, capture_output=True)
-            pending = {"yhat": yhat_c, "alpha": alpha, "phi": corr.phi}
-            # ORIGINAL: pending = {"yhat": yhat, "alpha": alpha}
+            pending = {"yhat": yhat, "alpha": alpha}
             rec.update(yhat=yhat.round(3).tolist(), demand=n_now.tolist(), running=running.astype(int).tolist(),
                        pods=pods.astype(int).tolist(), violated=violated, slow=slow, p95=float(lat),
-                       missed=missed, alpha=alpha, beta=aci.beta, Q=aci.quantile(), **pinfo,
-                       phi=corr.phi, p0_est=corr.p0(), phi_floor=corr.at_floor())
+                       missed=missed, alpha=alpha, beta=aci.beta, Q=aci.quantile(), **pinfo)
             tag = ""
         except Exception as ex:                               # fail-safe: keep current replicas
             rec.update(hold=True, error=repr(ex)[:200])
@@ -225,7 +197,7 @@ def main():
         with open(a.log, "a") as f:
             f.write(json.dumps(rec, default=float) + "\n")
         if "pods" in rec:
-            print(time.strftime("%H:%M:%S"), f"a={rec['alpha']:.3f} b={rec['beta']:.3f} Q={rec['Q']:.2f} phi={rec['phi']:.2f}",
+            print(time.strftime("%H:%M:%S"), f"a={rec['alpha']:.3f} b={rec['beta']:.3f} Q={rec['Q']:.2f}",
                   dict(zip([s.replace("service", "") for s in services], rec["pods"])), flush=True)
         else:
             print(time.strftime("%H:%M:%S"), tag, flush=True)

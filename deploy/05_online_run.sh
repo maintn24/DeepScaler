@@ -82,12 +82,7 @@ case "$AS" in
            --eps "$EPS" --pacer "$PACER" --period_min "$(python3 -c "print($RUN_TIME/60)")" \
            $( [ -n "$CALIB_CSV" ] && echo --calib_csv "$CALIB_CSV" ) \
            $( python3 -c "import json,sys; m=json.load(open('$ACI_MODEL_DIR/metrics.json'))['meta']; sys.exit(0 if 'mu' in m else 1)" 2>/dev/null || echo --mu "$MU" ) \
-           --phi "${PHI:-off}" --phi0 "${PHI0:-1.0}" --phi_min "${PHI_MIN:-0.5}" --phi_eta "${PHI_ETA:-0.02}" \
-           --inactive_rule "${INACTIVE:-ceil}" \
            --log "$RD/${RUN}_autoscaler.jsonl" > "$RD/${RUN}_console.log" 2>&1 & AS_PID=$! ;;
-  # 13/11: PHI=off|fixed|online (capacity correction; off = run of 10/11). INACTIVE=ceil reproduces the
-  # 10/11 run and Eq. (3.20); the code default 'deepscaler' (floor(yhat+0.65)) came after that run.
-  # ORIGINAL aci line had neither --phi* nor --inactive_rule (so it used the code default).
   mmn) python -m pipeline.rule_autoscalers --policy mmn --slo "$SLO" --ref_csv "$REF_CSV" --mu "$MU" \
            --log "$RD/${RUN}_autoscaler.jsonl" > "$RD/${RUN}_console.log" 2>&1 & AS_PID=$! ;;
 esac
